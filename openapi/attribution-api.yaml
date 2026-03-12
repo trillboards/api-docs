@@ -1,0 +1,2065 @@
+openapi: 3.0.3
+info:
+  title: Trillboards Attribution & Measurement API
+  version: 1.0.0
+  description: |
+    Closed-loop DOOH attribution engine with attention-verified impressions,
+    cross-channel multi-touch attribution, Bayesian incrementality measurement,
+    and creative performance optimization.
+
+    ## Why This Matters
+
+    Traditional DOOH attribution estimates impressions using population data.
+    Trillboards MEASURES them: on-device computer vision (ML Kit) counts faces
+    and tracks gaze, audio classification (YAMNet TFLite) detects ambient context,
+    and third-party mobile location signals (Intuizi) prove store visits.
+    Every metric in this API is deterministic, not probabilistic.
+
+    ## Authentication
+
+    All endpoints require a valid JWT token in the Authorization header:
+    ```
+    Authorization: Bearer <jwt_token>
+    ```
+    Tokens are obtained via `POST /v1/user/login`.
+
+    ## Key Concepts
+
+    - **aCPM (Attention CPM)**: Cost per 1,000 attention-verified impressions. Unlike standard CPM, aCPM only counts impressions where someone was actually looking at the screen.
+    - **Incremental Lift**: The percentage increase in store visits attributable to the DOOH campaign, measured via geo-holdout experiments with matched control groups.
+    - **CPIV (Cost Per Incremental Visit)**: Total media cost divided by the number of store visits that would NOT have happened without the campaign.
+    - **Weighted Confidence**: Exposure match confidence (spatial/temporal) multiplied by attention weight from FEIN edge AI. Higher = more certain the person both saw AND paid attention to the ad.
+    - **Attribution Chain**: A complete user journey across channels (billboard -> mobile ad -> web visit -> store visit) with credit allocation via multi-touch models.
+
+    ## Attribution Pipeline (6 Layers)
+
+    1. **Signal Ingestion** — Intuizi mobile device location pings + POI reference data
+    2. **Exposure Matching** — PostGIS ST_DWithin joins device signals with ad plays
+    3. **Attention Enrichment** — FEIN edge AI inference (face count, gaze, emotion) attached to each exposure
+    4. **Identity Resolution** — Household clustering, cross-device graph, pixel visitor linking
+    5. **Attribution** — Multi-touch credit allocation across DOOH + mobile + web + store channels
+    6. **Measurement** — Bayesian + frequentist incrementality with geo-holdout experiments
+
+  contact:
+    name: Trillboards Developer Support
+    email: developers@trillboards.com
+    url: https://trillboards.com/developers
+  license:
+    name: Proprietary
+    url: https://trillboards.com/terms-of-service
+
+servers:
+  - url: https://api.trillboards.com
+    description: Production API
+  - url: http://localhost:4004
+    description: Local development
+
+tags:
+  - name: Campaign Attribution
+    description: Campaign-level attribution summaries, timeseries, heatmaps, and journey funnels
+  - name: Attention Metrics
+    description: |
+      Attention-verified impression metrics from FEIN edge AI.
+      Only Trillboards provides deterministic attention data in DOOH —
+      measured by on-device computer vision, not estimated.
+  - name: Cross-Channel Attribution
+    description: Multi-touch attribution, cross-channel journeys, and per-channel ROAS across DOOH, mobile, web, and store
+  - name: Incrementality
+    description: Bayesian uplift measurement with geo-holdout experiments, ghost ads, and propensity matching
+  - name: Creative Attribution
+    description: Creative-level performance attribution — which creative x venue x daypart x weather combination drives the most conversions
+  - name: Cohort Export
+    description: Export exposed audience cohorts (MAID lists) to DSPs for retargeting activation
+  - name: Signal Transparency
+    description: Signal quality, freshness, and methodology transparency endpoints
+  - name: Event Ingestion
+    description: Cross-channel event ingestion — DSP postbacks, conversion pixels, transaction data
+
+paths:
+  /v1/advertiser/attribution/campaign/{campaignId}:
+    get:
+      operationId: getCampaignSummary
+      summary: Campaign attribution summary
+      description: |
+        Returns comprehensive attribution metrics for a campaign including reach,
+        exposures, footfall visits, incremental lift, cost per visit, and statistical
+        significance. This is the single endpoint that proves DOOH campaign ROI.
+
+        The response includes both raw metrics and quality indicators (match confidence,
+        control group size, significance level) so advertisers can assess data reliability.
+      tags: [Campaign Attribution]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      responses:
+        '200':
+          description: Attribution summary for the campaign
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/AttributionSummary'
+              example:
+                success: true
+                data:
+                  campaign_id: "camp_abc123"
+                  advertiser_id: "adv_xyz789"
+                  date_range:
+                    start: "2026-02-01"
+                    end: "2026-02-28"
+                  reach:
+                    unique_devices_exposed: 45200
+                    total_exposures: 128500
+                    avg_frequency: 2.84
+                  footfall:
+                    exposed_visitors: 3250
+                    control_visitors: 1820
+                    exposed_visit_rate: 0.0719
+                    control_visit_rate: 0.0403
+                    incremental_lift_pct: 78.4
+                    incremental_visits: 1430
+                    cost_per_incremental_visit: 6.99
+                  quality:
+                    control_group_size: 45200
+                    avg_match_confidence: 0.82
+                    statistical_significance: 0.997
+                    avg_time_to_visit_h: 48.3
+                    attribution_window_days: 14
+                  cost:
+                    total_media_cost: 10000
+                    cost_per_unique_reach: 0.22
+                  breakdowns:
+                    venue_breakdown:
+                      gym: { visitors: 1200, lift_pct: 92.1 }
+                      coffee_shop: { visitors: 850, lift_pct: 65.3 }
+                    daypart_breakdown:
+                      morning: { visitors: 1500, lift_pct: 85.0 }
+                      evening: { visitors: 1750, lift_pct: 72.0 }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/timeseries:
+    get:
+      operationId: getCampaignTimeseries
+      summary: Daily attribution timeseries
+      description: |
+        Returns daily attribution metrics over time. Use this to answer:
+        "Is my campaign's lift improving or degrading?" and "Which days drive
+        the most store visits?"
+
+        Supports date range filtering. If no dates specified, returns the full
+        campaign duration.
+      tags: [Campaign Attribution]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Start date (ISO 8601, e.g. 2026-02-01)
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+          description: End date (ISO 8601, e.g. 2026-02-28)
+      responses:
+        '200':
+          description: Daily timeseries of attribution metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AttributionTimeseriesPoint'
+              example:
+                success: true
+                data:
+                  - summary_date: "2026-02-15"
+                    unique_devices_exposed: 1620
+                    total_exposures: 4580
+                    exposed_visitors: 116
+                    control_visitors: 65
+                    incremental_lift_pct: 78.5
+                    incremental_visits: 51
+                    cost_per_incremental_visit: 7.84
+                    avg_match_confidence: 0.83
+                    statistical_significance: 0.982
+                  - summary_date: "2026-02-16"
+                    unique_devices_exposed: 1780
+                    total_exposures: 5120
+                    exposed_visitors: 134
+                    control_visitors: 72
+                    incremental_lift_pct: 86.1
+                    incremental_visits: 62
+                    cost_per_incremental_visit: 6.45
+                    avg_match_confidence: 0.85
+                    statistical_significance: 0.994
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/heatmap:
+    get:
+      operationId: getCampaignHeatmap
+      summary: Geospatial exposure heatmap
+      description: |
+        Returns geospatial clusters of exposure and conversion density.
+        Answers: "WHERE are people seeing my ads and then visiting my stores?"
+
+        Each point represents a geographic cluster with exposure count,
+        conversion count, and density. Use for map visualizations showing
+        campaign impact by location.
+      tags: [Campaign Attribution]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      responses:
+        '200':
+          description: Geospatial heatmap data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/HeatmapPoint'
+              example:
+                success: true
+                data:
+                  - latitude: 40.7128
+                    longitude: -74.0060
+                    exposure_count: 3200
+                    conversion_count: 245
+                    density: 0.89
+                    geohash: "dr5ru7"
+                  - latitude: 40.7580
+                    longitude: -73.9855
+                    exposure_count: 2800
+                    conversion_count: 198
+                    density: 0.76
+                    geohash: "dr5rub"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/journey:
+    get:
+      operationId: getCampaignJourney
+      summary: Attribution journey funnel
+      description: |
+        Returns the attribution funnel showing how exposed devices progress
+        through the conversion journey: Exposure -> Visit -> Transaction.
+
+        Use this to understand conversion rates at each stage and identify
+        where the funnel leaks.
+      tags: [Campaign Attribution]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      responses:
+        '200':
+          description: Journey funnel data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/JourneyFunnel'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/attention:
+    get:
+      operationId: getCampaignAttention
+      summary: Attention metrics summary
+      description: |
+        Returns attention-verified impression metrics from FEIN edge AI.
+        This is data that ONLY Trillboards can provide in DOOH.
+
+        Unlike CTV viewability which uses probabilistic models ("MRC standard"
+        = 50% of pixels visible for 2 seconds), Trillboards measures actual
+        human attention via on-device computer vision:
+
+        - **face_count**: How many people were actually in front of the screen
+        - **attention_score**: What fraction were looking at the screen (gaze detection)
+        - **dwell_seconds**: How long they stayed in view
+        - **emotion_engagement**: Facial expression analysis (not recording, edge-only)
+        - **aCPM**: Cost per 1,000 attention-verified impressions
+
+        These are MEASURED signals, not estimates.
+      tags: [Attention Metrics]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      responses:
+        '200':
+          description: Attention metrics for the campaign
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/AttentionMetrics'
+              example:
+                success: true
+                data:
+                  campaign_id: "camp_abc123"
+                  total_impressions: 128500
+                  unique_devices: 45200
+                  attention:
+                    avg_attention_score: 0.72
+                    median_attention_score: 0.68
+                    p90_attention_score: 0.94
+                    attention_qualified_pct: 64.3
+                    avg_dwell_seconds: 8.4
+                    avg_face_count: 2.3
+                  economics:
+                    standard_cpm: 12.50
+                    attention_cpm: 19.40
+                    cost_per_attentive_reach: 0.34
+                    cost_per_attentive_visit: 8.75
+                  emotion:
+                    avg_emotion_engagement: 0.58
+                    positive_emotion_pct: 42.1
+                    emotion_breakdown:
+                      neutral: 45.2
+                      happy: 28.3
+                      surprised: 13.8
+                      interested: 8.4
+                      other: 4.3
+                  breakdowns:
+                    daypart_breakdown:
+                      morning: { avg_attention: 0.78, avg_dwell: 9.2 }
+                      afternoon: { avg_attention: 0.65, avg_dwell: 7.1 }
+                      evening: { avg_attention: 0.74, avg_dwell: 8.8 }
+                    venue_type_breakdown:
+                      gym: { avg_attention: 0.85, avg_dwell: 12.3 }
+                      coffee_shop: { avg_attention: 0.71, avg_dwell: 6.5 }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/attention/creative:
+    get:
+      operationId: getCreativeAttentionComparison
+      summary: Per-creative attention comparison
+      description: |
+        Compares attention metrics across creatives within a campaign.
+        Answers: "Which creative gets more attention AND more store visits?"
+
+        This is the holy grail of DOOH optimization — correlating creative
+        execution with actual human attention and downstream conversion.
+        No other platform can show this because no other platform measures
+        attention at the creative level.
+      tags: [Attention Metrics]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      responses:
+        '200':
+          description: Per-creative attention comparison
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CreativeAttentionComparison'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/attention/timeseries:
+    get:
+      operationId: getAttentionTimeseries
+      summary: Attention metrics over time
+      description: |
+        Returns daily attention quality metrics. Use this to detect
+        attention fatigue: if attention_score drops over time while
+        impressions stay flat, the creative is wearing out and needs
+        refreshing.
+      tags: [Attention Metrics]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Daily attention metrics timeseries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AttentionTimeseriesPoint'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/multi-touch:
+    get:
+      operationId: getMultiTouchAttribution
+      summary: Multi-touch attribution summary
+      description: |
+        Returns cross-channel credit allocation across DOOH, mobile, web,
+        and store touchpoints. Supports multiple attribution models:
+
+        - **time_decay**: Recent touchpoints get more credit (7-day half-life default)
+        - **position_based**: First and last touch get 40% each, middle touches share 20%
+        - **attention_weighted**: Credit proportional to FEIN attention score at each touchpoint
+        - **shapley**: Game-theory-based fair value allocation (computationally intensive)
+
+        This answers: "How much credit does DOOH deserve vs mobile vs web?"
+      tags: [Cross-Channel Attribution]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      responses:
+        '200':
+          description: Multi-touch attribution data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/MultiTouchAttribution'
+              example:
+                success: true
+                data:
+                  campaign_id: "camp_abc123"
+                  model: "time_decay"
+                  total_conversions: 1430
+                  total_attributed_revenue_cents: 2145000
+                  channel_credits:
+                    dooh:
+                      credit_pct: 42.5
+                      attributed_conversions: 608
+                      attributed_revenue_cents: 911625
+                    mobile_ad:
+                      credit_pct: 28.3
+                      attributed_conversions: 405
+                      attributed_revenue_cents: 607035
+                    web_visit:
+                      credit_pct: 18.7
+                      attributed_conversions: 267
+                      attributed_revenue_cents: 401115
+                    store_visit:
+                      credit_pct: 10.5
+                      attributed_conversions: 150
+                      attributed_revenue_cents: 225225
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/cross-channel-journey:
+    get:
+      operationId: getCrossChannelJourney
+      summary: Cross-channel journey (Sankey flow)
+      description: |
+        Returns flow data suitable for Sankey diagrams showing how users
+        move across channels after DOOH exposure.
+
+        Example flow: Billboard (42%) -> Mobile Ad Click (28%) -> Website Visit (18%) -> Store Purchase (12%)
+
+        Each node/link includes volume and conversion rate, enabling
+        visualization of the most common and most valuable paths.
+      tags: [Cross-Channel Attribution]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      responses:
+        '200':
+          description: Sankey flow data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/CrossChannelJourney'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/channel-roas:
+    get:
+      operationId: getChannelROAS
+      summary: Per-channel ROAS
+      description: |
+        Returns return on ad spend (ROAS) broken down by channel.
+        Answers: "DOOH vs mobile vs web — which channel pulls its weight?"
+
+        ROAS = attributed_revenue / media_cost. A ROAS > 1.0 means the
+        channel generates more revenue than it costs. Use this to
+        justify DOOH budget allocation vs digital channels.
+      tags: [Cross-Channel Attribution]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      responses:
+        '200':
+          description: Per-channel ROAS
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/ChannelROAS'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/incrementality:
+    get:
+      operationId: getCampaignIncrementality
+      summary: Incrementality results
+      description: |
+        Returns Bayesian uplift measurement for a campaign. This is the
+        gold standard of DOOH attribution — proving that store visits
+        WOULD NOT have happened without the campaign.
+
+        Results include:
+        - **Bayesian posterior**: P(lift > 0) and 95% credible intervals
+        - **Frequentist**: chi-square, p-value, confidence intervals
+        - **Propensity quality**: standardized mean difference for covariate balance
+
+        A P(lift > 0) > 0.95 indicates strong evidence of causal effect.
+      tags: [Incrementality]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      responses:
+        '200':
+          description: Incrementality results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/IncrementalityResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/experiment:
+    post:
+      operationId: createExperiment
+      summary: Create incrementality experiment
+      description: |
+        Creates a new incrementality experiment with specified design:
+
+        - **geo_holdout**: Withhold ads in control DMAs, compare visit rates
+        - **ghost_ad**: Serve PSA ads to control group, measure true lift
+        - **psa_control**: Serve public service announcements as control creatives
+        - **matched_market**: Match treatment/control markets on covariates
+
+        The experiment runs automatically once created. Results populate
+        in the experiment status endpoint as data accumulates.
+      tags: [Incrementality]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateExperimentRequest'
+            example:
+              campaignId: "camp_abc123"
+              experimentType: "geo_holdout"
+              treatmentDmas: ["501", "602", "803"]
+              controlDmas: ["504", "623", "819"]
+              holdoutPct: 0.10
+              targetMde: 0.10
+              targetPower: 0.80
+              targetAlpha: 0.05
+      responses:
+        '201':
+          description: Experiment created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Experiment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/experiment/{experimentId}:
+    get:
+      operationId: getExperiment
+      summary: Experiment status and results
+      description: |
+        Returns experiment configuration, status, and results (if available).
+        Results include both Bayesian posteriors and frequentist p-values.
+      tags: [Incrementality]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/experimentId'
+      responses:
+        '200':
+          description: Experiment details with results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/ExperimentWithResults'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/experiment/{experimentId}/power:
+    get:
+      operationId: getExperimentPower
+      summary: Power analysis
+      description: |
+        Returns the required sample size to detect a given minimum detectable
+        effect (MDE) at specified significance and power levels.
+
+        Use this before running an experiment to ensure you'll have enough
+        data to detect the effect you care about.
+      tags: [Incrementality]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/experimentId'
+        - name: baselineRate
+          in: query
+          schema:
+            type: number
+            default: 0.02
+          description: Baseline visit rate (default 2%)
+      responses:
+        '200':
+          description: Power analysis results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/PowerAnalysis'
+              example:
+                success: true
+                data:
+                  required_sample_per_group: 3842
+                  total_sample_needed: 7684
+                  baselineRate: 0.02
+                  mde: 0.10
+                  alpha: 0.05
+                  power: 0.80
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/creative-attribution:
+    get:
+      operationId: getCreativeAttribution
+      summary: Creative-level attribution performance
+      description: |
+        Returns attribution outcomes broken down by creative. Correlates
+        creative execution (attention, dwell, emotion) with downstream
+        outcomes (store visits, lift, cost per visit).
+
+        Includes context interaction analysis: which creative performs best
+        in which venue type, daypart, and weather condition.
+      tags: [Creative Attribution]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      responses:
+        '200':
+          description: Creative attribution performance data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CreativeAttributionPerformance'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/creative-attribution/{creativeId}/timeseries:
+    get:
+      operationId: getCreativeAttributionTimeseries
+      summary: Creative attribution over time
+      description: |
+        Returns daily attribution metrics for a specific creative.
+        Use this to detect creative fatigue: if attention degrades while
+        impressions stay constant, rotate the creative.
+      tags: [Creative Attribution]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+        - name: creativeId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9_-]{1,128}$'
+          description: Creative identifier
+      responses:
+        '200':
+          description: Creative timeseries data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CreativeAttributionTimeseriesPoint'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/cohort/export:
+    post:
+      operationId: exportCohort
+      summary: Export cohort to DSP
+      description: |
+        Exports the exposed audience cohort (SHA-256 hashed MAID list) to
+        a DSP for retargeting activation. Supported destinations:
+
+        - **ttd**: The Trade Desk (1P data segment upload)
+        - **dv360**: Google Display & Video 360 (Customer Match)
+        - **meta**: Meta/Facebook (Custom Audiences)
+
+        Returns a pre-signed S3 URL for the exported file and the MAID count.
+      tags: [Cohort Export]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination]
+              properties:
+                destination:
+                  type: string
+                  enum: [ttd, dv360, meta]
+                  description: Target DSP platform
+            example:
+              destination: "ttd"
+      responses:
+        '200':
+          description: Cohort exported successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/CohortExport'
+              example:
+                success: true
+                data:
+                  exportId: "exp_a1b2c3d4"
+                  s3Url: "https://trillboards-cohorts.s3.amazonaws.com/exports/camp_abc123/ttd/2026-02-28.csv?X-Amz-..."
+                  maidCount: 45200
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/signal-quality:
+    get:
+      operationId: getSignalQuality
+      summary: Signal quality and coverage
+      description: |
+        Returns signal quality metrics showing how complete and fresh the
+        attribution data is for this campaign. This is radical transparency —
+        no other DOOH platform exposes their data quality at the campaign level.
+
+        Use this to assess confidence in attribution results:
+        - High attention_coverage_pct = most impressions have FEIN verification
+        - Low avg_signal_age_seconds = signals are fresh (real-time, not batch)
+        - High bayesian_prob_positive = strong evidence of causal effect
+      tags: [Signal Transparency]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      responses:
+        '200':
+          description: Signal quality report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/SignalQuality'
+              example:
+                success: true
+                data:
+                  campaign_id: "camp_abc123"
+                  signal_coverage:
+                    attention_coverage_pct: 87.3
+                    fein_matched_pct: 92.1
+                    identity_resolved_pct: 74.5
+                    footfall_measured_pct: 68.2
+                  signal_freshness:
+                    avg_signal_age_seconds: 18
+                    p95_signal_age_seconds: 45
+                  measurement_confidence:
+                    exposure_matching_avg_confidence: 0.82
+                    attention_weighted_avg_confidence: 0.91
+                    incrementality_p_value: 0.003
+                    bayesian_prob_positive: 0.997
+                  data_provenance:
+                    device_signal_source: "intuizi"
+                    attention_source: "fein_edge_ai"
+                    proof_of_play: "ed25519_signed"
+                    identity_graph_depth: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advertiser/attribution/campaign/{campaignId}/methodology:
+    get:
+      operationId: getMethodology
+      summary: Attribution methodology explanation
+      description: |
+        Returns a human-readable explanation of how attribution was computed
+        for THIS specific campaign. Covers exposure matching methodology,
+        attention enrichment, incrementality measurement approach, and
+        cross-channel attribution model.
+
+        This is RADICAL TRANSPARENCY — no other DOOH platform explains
+        their methodology at the campaign level.
+      tags: [Signal Transparency]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/campaignId'
+      responses:
+        '200':
+          description: Methodology explanation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Methodology'
+              example:
+                success: true
+                data:
+                  campaign_id: "camp_abc123"
+                  exposure_matching:
+                    method: "PostGIS ST_DWithin geospatial join"
+                    description: "Matched mobile device location signals within 200m of screens during ad play windows using PostGIS ST_DWithin. Distance and time delta are recorded for each match."
+                    max_distance_m: 200
+                    confidence_model: "Inverse distance + time decay"
+                  attention_enrichment:
+                    method: "FEIN edge AI inference join"
+                    description: "Joined exposure matches with FEIN edge AI inference outcomes (face detection, gaze tracking, emotion analysis) to compute attention-weighted confidence scores."
+                    signals: ["face_count", "attention_score", "dwell_seconds", "emotion_score", "engagement_score"]
+                  incrementality:
+                    method: "Bayesian Beta-Binomial uplift model"
+                    description: "Geo-holdout experiment with DMA-matched control group. Bayesian Beta-Binomial model with 10,000 Monte Carlo samples. Frequentist chi-square test for comparison."
+                    experiment_type: "geo_holdout"
+                    control_group_matching: "DMA-level propensity score matching"
+                  cross_channel:
+                    method: "Time-decay multi-touch attribution"
+                    description: "Time-decay attribution with 7-day half-life across 4 channels (DOOH, mobile, web, store). Credit allocated proportionally to recency and attention weight."
+                    model: "time_decay"
+                    half_life_hours: 168
+                    channels: ["dooh", "mobile_ad", "web_visit", "store_visit"]
+                  privacy:
+                    description: "All device identifiers are SHA-256 hashed. K-anonymity enforced with minimum group size of 5. No PII is stored or transmitted. FEIN inference runs on-device only."
+                    identifier_hashing: "SHA-256"
+                    k_anonymity_threshold: 5
+                    fein_processing: "on_device_only"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/attribution/event/mobile:
+    post:
+      operationId: ingestMobileEvent
+      summary: DSP mobile postback
+      description: |
+        Receives mobile ad impression/click postbacks from DSP partners.
+        These events are ingested as touchpoints in the cross-channel
+        attribution pipeline, enabling DOOH -> mobile -> conversion chains.
+
+        No authentication required — DSP postback URLs are typically
+        pre-configured and fire-and-forget.
+      tags: [Event Ingestion]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MobileEventRequest'
+            example:
+              maidHash: "a1b2c3d4e5f6..."
+              campaignId: "camp_abc123"
+              creativeId: "cre_xyz789"
+              advertiserId: "adv_456"
+              dspPartner: "thetradedesk"
+              eventType: "click"
+              placementId: "placement_001"
+      responses:
+        '201':
+          description: Event ingested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  touchpointId:
+                    type: string
+                    format: uuid
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/attribution/pixel/{advertiserId}/{campaignId}:
+    get:
+      operationId: getTrackingPixel
+      summary: Conversion tracking pixel
+      description: |
+        Returns a 1x1 transparent GIF for web conversion tracking. Embed as:
+        ```html
+        <img src="https://api.trillboards.com/v1/attribution/pixel/{advertiserId}/{campaignId}" width="1" height="1" />
+        ```
+
+        Each pixel fire creates a touchpoint in the cross-channel attribution
+        pipeline using a privacy-safe visitor ID (SHA-256 of IP + User-Agent).
+        No cookies, no JavaScript — pure server-side tracking.
+      tags: [Event Ingestion]
+      parameters:
+        - name: advertiserId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: campaignId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9_-]{1,128}$'
+      responses:
+        '200':
+          description: 1x1 transparent GIF
+          content:
+            image/gif:
+              schema:
+                type: string
+                format: binary
+
+  /v1/attribution/event/transaction:
+    post:
+      operationId: ingestTransactionEvent
+      summary: Transaction data ingestion
+      description: |
+        Ingests transaction/purchase data for conversion attribution.
+        Sources include credit card panel data, POS receipts, and
+        e-commerce webhooks.
+
+        Transaction data is matched to exposed devices via MAID hash
+        to prove: "This person saw the ad AND made a purchase."
+      tags: [Event Ingestion]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionEventRequest'
+            example:
+              maidHash: "a1b2c3d4e5f6..."
+              campaignId: "camp_abc123"
+              advertiserId: "adv_456"
+              transactionAmountCents: 4999
+              basketItems:
+                - sku: "SKU-001"
+                  name: "Premium Widget"
+                  quantity: 1
+                  price_cents: 4999
+              poiId: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '201':
+          description: Transaction event ingested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  touchpointId:
+                    type: string
+                    format: uuid
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained via POST /v1/user/login
+
+  parameters:
+    campaignId:
+      name: campaignId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-zA-Z0-9_-]{1,128}$'
+      description: Campaign identifier
+    experimentId:
+      name: experimentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Incrementality experiment UUID
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+        error:
+          type: string
+
+    AttributionSummary:
+      type: object
+      description: |
+        Comprehensive campaign attribution summary with reach, footfall,
+        cost, and quality metrics. This is the single object that proves
+        DOOH campaign ROI.
+      properties:
+        campaign_id:
+          type: string
+        advertiser_id:
+          type: string
+        date_range:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date
+            end:
+              type: string
+              format: date
+        reach:
+          type: object
+          properties:
+            unique_devices_exposed:
+              type: integer
+              description: Count of unique MAID hashes exposed to the campaign
+            total_exposures:
+              type: integer
+              description: Total exposure events (one device can have multiple)
+            avg_frequency:
+              type: number
+              description: Average exposures per unique device
+        footfall:
+          type: object
+          description: Footfall attribution — proving ads drove store visits
+          properties:
+            exposed_visitors:
+              type: integer
+              description: Exposed devices that visited a POI within attribution window
+            control_visitors:
+              type: integer
+              description: Unexposed control group devices that visited a POI
+            exposed_visit_rate:
+              type: number
+              description: exposed_visitors / unique_devices_exposed
+            control_visit_rate:
+              type: number
+              description: control_visitors / control_group_size
+            incremental_lift_pct:
+              type: number
+              description: |
+                Percentage increase in visit rate attributable to the campaign.
+                Formula: (exposed_visit_rate - control_visit_rate) / control_visit_rate * 100
+            incremental_visits:
+              type: integer
+              description: Visits that would NOT have happened without the campaign
+            cost_per_incremental_visit:
+              type: number
+              description: total_media_cost / incremental_visits (CPIV)
+        quality:
+          type: object
+          description: Data quality and statistical confidence indicators
+          properties:
+            control_group_size:
+              type: integer
+              description: Size of DMA-matched unexposed control group
+            avg_match_confidence:
+              type: number
+              minimum: 0
+              maximum: 1
+              description: Average geospatial match confidence score
+            statistical_significance:
+              type: number
+              minimum: 0
+              maximum: 1
+              description: P(lift > 0) from Bayesian model. > 0.95 = significant.
+            avg_time_to_visit_h:
+              type: number
+              description: Average hours from exposure to store visit
+            attribution_window_days:
+              type: integer
+              description: Attribution lookback window in days
+        cost:
+          type: object
+          properties:
+            total_media_cost:
+              type: number
+              description: Total campaign media spend
+            cost_per_unique_reach:
+              type: number
+              description: Cost per unique device reached
+        breakdowns:
+          type: object
+          properties:
+            venue_breakdown:
+              type: object
+              additionalProperties:
+                type: object
+                properties:
+                  visitors:
+                    type: integer
+                  lift_pct:
+                    type: number
+            daypart_breakdown:
+              type: object
+              additionalProperties:
+                type: object
+                properties:
+                  visitors:
+                    type: integer
+                  lift_pct:
+                    type: number
+
+    AttributionTimeseriesPoint:
+      type: object
+      properties:
+        summary_date:
+          type: string
+          format: date
+        unique_devices_exposed:
+          type: integer
+        total_exposures:
+          type: integer
+        exposed_visitors:
+          type: integer
+        control_visitors:
+          type: integer
+        incremental_lift_pct:
+          type: number
+        incremental_visits:
+          type: integer
+        cost_per_incremental_visit:
+          type: number
+        avg_match_confidence:
+          type: number
+        statistical_significance:
+          type: number
+
+    HeatmapPoint:
+      type: object
+      properties:
+        latitude:
+          type: number
+        longitude:
+          type: number
+        exposure_count:
+          type: integer
+          description: Number of device exposures in this geographic cluster
+        conversion_count:
+          type: integer
+          description: Number of POI visits from exposed devices in this area
+        density:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Relative density (0-1) normalized across all clusters
+        geohash:
+          type: string
+          description: Geohash-6 cell identifier
+
+    JourneyFunnel:
+      type: object
+      description: Attribution funnel from exposure through conversion stages
+      properties:
+        stages:
+          type: array
+          items:
+            type: object
+            properties:
+              stage:
+                type: string
+              count:
+                type: integer
+              conversion_rate:
+                type: number
+        total_exposed:
+          type: integer
+        total_converted:
+          type: integer
+
+    AttentionMetrics:
+      type: object
+      description: |
+        Attention-verified impression metrics from FEIN edge AI.
+        Every field is MEASURED by on-device computer vision, not estimated.
+      properties:
+        campaign_id:
+          type: string
+        total_impressions:
+          type: integer
+        unique_devices:
+          type: integer
+        attention:
+          type: object
+          properties:
+            avg_attention_score:
+              type: number
+              minimum: 0
+              maximum: 1
+              description: Mean fraction of faces looking at screen across all impressions
+            median_attention_score:
+              type: number
+            p90_attention_score:
+              type: number
+              description: 90th percentile — the attention floor for top 10% of impressions
+            attention_qualified_pct:
+              type: number
+              description: Percentage of impressions with attention_score >= 0.5
+            avg_dwell_seconds:
+              type: number
+              description: Average time faces were in view of the screen
+            avg_face_count:
+              type: number
+              description: Average number of faces detected per impression
+        economics:
+          type: object
+          description: Attention-adjusted pricing metrics
+          properties:
+            standard_cpm:
+              type: number
+              description: Traditional CPM (cost per 1,000 impressions)
+            attention_cpm:
+              type: number
+              description: |
+                aCPM = cost / (SUM(attention_score * face_count) / 1000).
+                The true cost of an attention-verified impression.
+            cost_per_attentive_reach:
+              type: number
+            cost_per_attentive_visit:
+              type: number
+        emotion:
+          type: object
+          properties:
+            avg_emotion_engagement:
+              type: number
+            positive_emotion_pct:
+              type: number
+              description: Percentage of impressions with happy/surprised/interested emotions
+            emotion_breakdown:
+              type: object
+              additionalProperties:
+                type: number
+        breakdowns:
+          type: object
+          properties:
+            daypart_breakdown:
+              type: object
+              additionalProperties:
+                type: object
+            venue_type_breakdown:
+              type: object
+              additionalProperties:
+                type: object
+
+    CreativeAttentionComparison:
+      type: object
+      properties:
+        creative_id:
+          type: string
+        impressions:
+          type: integer
+        avg_attention_score:
+          type: number
+        avg_dwell_seconds:
+          type: number
+        avg_emotion_engagement:
+          type: number
+        dominant_emotion:
+          type: string
+        attention_qualified_pct:
+          type: number
+        standard_cpm:
+          type: number
+        attention_cpm:
+          type: number
+
+    AttentionTimeseriesPoint:
+      type: object
+      properties:
+        metric_date:
+          type: string
+          format: date
+        total_impressions:
+          type: integer
+        avg_attention_score:
+          type: number
+        avg_dwell_seconds:
+          type: number
+        avg_face_count:
+          type: number
+        avg_emotion_engagement:
+          type: number
+        attention_qualified_pct:
+          type: number
+        attention_cpm:
+          type: number
+
+    MultiTouchAttribution:
+      type: object
+      description: |
+        Cross-channel credit allocation showing how much each channel
+        contributed to conversions.
+      properties:
+        campaign_id:
+          type: string
+        model:
+          type: string
+          enum: [time_decay, position_based, attention_weighted, shapley]
+          description: Attribution model used for credit allocation
+        total_conversions:
+          type: integer
+        total_attributed_revenue_cents:
+          type: integer
+        channel_credits:
+          type: object
+          properties:
+            dooh:
+              $ref: '#/components/schemas/ChannelCredit'
+            mobile_ad:
+              $ref: '#/components/schemas/ChannelCredit'
+            web_visit:
+              $ref: '#/components/schemas/ChannelCredit'
+            store_visit:
+              $ref: '#/components/schemas/ChannelCredit'
+
+    ChannelCredit:
+      type: object
+      properties:
+        credit_pct:
+          type: number
+          description: Percentage of total attribution credit
+        attributed_conversions:
+          type: integer
+        attributed_revenue_cents:
+          type: integer
+
+    CrossChannelJourney:
+      type: object
+      description: Sankey flow data for cross-channel user journeys
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              channel:
+                type: string
+              count:
+                type: integer
+        links:
+          type: array
+          items:
+            type: object
+            properties:
+              source:
+                type: string
+              target:
+                type: string
+              value:
+                type: integer
+              conversion_rate:
+                type: number
+        total_journeys:
+          type: integer
+
+    ChannelROAS:
+      type: object
+      properties:
+        campaign_id:
+          type: string
+        total_media_cost:
+          type: number
+        total_attributed_revenue:
+          type: number
+        overall_roas:
+          type: number
+          description: Total attributed revenue / total media cost
+        channels:
+          type: array
+          items:
+            type: object
+            properties:
+              channel:
+                type: string
+              media_cost:
+                type: number
+              attributed_revenue:
+                type: number
+              roas:
+                type: number
+              conversion_count:
+                type: integer
+
+    IncrementalityResult:
+      type: object
+      description: |
+        Bayesian + frequentist incrementality measurement results.
+        Provides both perspectives for statistical rigor.
+      properties:
+        campaign_id:
+          type: string
+        experiment_type:
+          type: string
+          enum: [geo_holdout, ghost_ad, psa_control, matched_market]
+        treatment:
+          type: object
+          properties:
+            devices:
+              type: integer
+            visitors:
+              type: integer
+            visit_rate:
+              type: number
+        control:
+          type: object
+          properties:
+            devices:
+              type: integer
+            visitors:
+              type: integer
+            visit_rate:
+              type: number
+        lift:
+          type: object
+          properties:
+            absolute_lift:
+              type: number
+            relative_lift_pct:
+              type: number
+            incremental_visits:
+              type: integer
+        frequentist:
+          type: object
+          properties:
+            chi_square:
+              type: number
+            p_value:
+              type: number
+              description: P-value from chi-square test. < 0.05 = significant.
+            confidence_interval_lower:
+              type: number
+            confidence_interval_upper:
+              type: number
+        bayesian:
+          type: object
+          description: Bayesian Beta-Binomial posterior with Monte Carlo sampling
+          properties:
+            posterior_prob_positive:
+              type: number
+              description: P(lift > 0). > 0.95 indicates strong evidence of positive effect.
+            expected_uplift:
+              type: number
+            credible_interval_lower:
+              type: number
+              description: Lower bound of 95% highest density interval
+            credible_interval_upper:
+              type: number
+              description: Upper bound of 95% highest density interval
+
+    CreateExperimentRequest:
+      type: object
+      required: [campaignId, experimentType]
+      properties:
+        campaignId:
+          type: string
+          pattern: '^[a-zA-Z0-9_-]{1,128}$'
+        experimentType:
+          type: string
+          enum: [geo_holdout, ghost_ad, psa_control, matched_market]
+        treatmentDmas:
+          type: array
+          items:
+            type: string
+          description: DMA codes for treatment (ads shown)
+        controlDmas:
+          type: array
+          items:
+            type: string
+          description: DMA codes for control (ads withheld)
+        holdoutPct:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0.10
+          description: Fraction of audience to withhold ads from
+        targetMde:
+          type: number
+          default: 0.10
+          description: Minimum detectable effect (e.g. 0.10 = 10% lift)
+        targetPower:
+          type: number
+          default: 0.80
+          description: Statistical power (probability of detecting true effect)
+        targetAlpha:
+          type: number
+          default: 0.05
+          description: Significance level (probability of false positive)
+
+    Experiment:
+      type: object
+      properties:
+        experiment_id:
+          type: string
+          format: uuid
+        campaign_id:
+          type: string
+        advertiser_id:
+          type: string
+        experiment_type:
+          type: string
+          enum: [geo_holdout, ghost_ad, psa_control, matched_market]
+        status:
+          type: string
+          enum: [draft, active, measuring, completed, cancelled]
+        treatment_dmas:
+          type: array
+          items:
+            type: string
+        control_dmas:
+          type: array
+          items:
+            type: string
+        holdout_pct:
+          type: number
+        target_mde:
+          type: number
+        target_power:
+          type: number
+        target_alpha:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+
+    ExperimentWithResults:
+      allOf:
+        - type: object
+          properties:
+            experiment:
+              $ref: '#/components/schemas/Experiment'
+            results:
+              $ref: '#/components/schemas/IncrementalityResult'
+
+    PowerAnalysis:
+      type: object
+      properties:
+        required_sample_per_group:
+          type: integer
+          description: Minimum sample size needed per group (treatment + control)
+        total_sample_needed:
+          type: integer
+        baselineRate:
+          type: number
+        mde:
+          type: number
+        alpha:
+          type: number
+        power:
+          type: number
+
+    CreativeAttributionPerformance:
+      type: object
+      properties:
+        campaign_id:
+          type: string
+        creative_id:
+          type: string
+        variant:
+          type: string
+        avg_attention_score:
+          type: number
+        avg_dwell_seconds:
+          type: number
+        avg_emotion_engagement:
+          type: number
+        dominant_emotion:
+          type: string
+        store_visits:
+          type: integer
+        visit_rate:
+          type: number
+        incremental_lift_pct:
+          type: number
+        cost_per_visit:
+          type: number
+        best_venue_type:
+          type: string
+          description: Venue type where this creative performs best
+        best_daypart:
+          type: string
+          description: Time of day where this creative performs best
+        best_weather:
+          type: string
+          description: Weather condition where this creative performs best
+        context_performance:
+          type: object
+          description: Detailed performance by context (venue x daypart x weather)
+
+    CreativeAttributionTimeseriesPoint:
+      type: object
+      properties:
+        metric_date:
+          type: string
+          format: date
+        avg_attention_score:
+          type: number
+        avg_dwell_seconds:
+          type: number
+        avg_emotion_engagement:
+          type: number
+        store_visits:
+          type: integer
+        visit_rate:
+          type: number
+        incremental_lift_pct:
+          type: number
+        cost_per_visit:
+          type: number
+
+    SignalQuality:
+      type: object
+      description: |
+        Signal quality and coverage metrics for a campaign. Use this to
+        assess the reliability and completeness of attribution data.
+      properties:
+        campaign_id:
+          type: string
+        signal_coverage:
+          type: object
+          description: What percentage of impressions have each signal type
+          properties:
+            attention_coverage_pct:
+              type: number
+              description: Percentage of exposures with FEIN attention data
+            fein_matched_pct:
+              type: number
+              description: Percentage of exposures successfully joined with FEIN inference
+            identity_resolved_pct:
+              type: number
+              description: Percentage of devices resolved to household/cross-device graph
+            footfall_measured_pct:
+              type: number
+              description: Percentage of exposed devices with footfall outcome data
+        signal_freshness:
+          type: object
+          description: How fresh the signals are (real-time vs batch)
+          properties:
+            avg_signal_age_seconds:
+              type: number
+              description: Average age of device signals at time of ingestion
+            p95_signal_age_seconds:
+              type: number
+              description: 95th percentile signal age
+        measurement_confidence:
+          type: object
+          properties:
+            exposure_matching_avg_confidence:
+              type: number
+              minimum: 0
+              maximum: 1
+            attention_weighted_avg_confidence:
+              type: number
+              minimum: 0
+              maximum: 1
+            incrementality_p_value:
+              type: number
+            bayesian_prob_positive:
+              type: number
+        data_provenance:
+          type: object
+          description: Source of each data type for auditability
+          properties:
+            device_signal_source:
+              type: string
+              description: Provider of mobile device location signals
+            attention_source:
+              type: string
+              description: Source of attention/engagement signals
+            proof_of_play:
+              type: string
+              description: Cryptographic proof method for ad plays
+            identity_graph_depth:
+              type: integer
+              description: Maximum hop depth in identity resolution graph
+
+    Methodology:
+      type: object
+      description: |
+        Human-readable explanation of how attribution was computed
+        for a specific campaign. Full methodology transparency.
+      properties:
+        campaign_id:
+          type: string
+        exposure_matching:
+          type: object
+          properties:
+            method:
+              type: string
+            description:
+              type: string
+            max_distance_m:
+              type: number
+            confidence_model:
+              type: string
+        attention_enrichment:
+          type: object
+          properties:
+            method:
+              type: string
+            description:
+              type: string
+            signals:
+              type: array
+              items:
+                type: string
+        incrementality:
+          type: object
+          properties:
+            method:
+              type: string
+            description:
+              type: string
+            experiment_type:
+              type: string
+            control_group_matching:
+              type: string
+        cross_channel:
+          type: object
+          properties:
+            method:
+              type: string
+            description:
+              type: string
+            model:
+              type: string
+            half_life_hours:
+              type: number
+            channels:
+              type: array
+              items:
+                type: string
+        privacy:
+          type: object
+          properties:
+            description:
+              type: string
+            identifier_hashing:
+              type: string
+            k_anonymity_threshold:
+              type: integer
+            fein_processing:
+              type: string
+
+    MobileEventRequest:
+      type: object
+      required: [maidHash, campaignId]
+      properties:
+        maidHash:
+          type: string
+          description: SHA-256 hash of the mobile advertising ID
+        campaignId:
+          type: string
+          pattern: '^[a-zA-Z0-9_-]{1,128}$'
+        creativeId:
+          type: string
+        advertiserId:
+          type: string
+        dspPartner:
+          type: string
+          description: DSP name (e.g. "thetradedesk", "dv360")
+        eventType:
+          type: string
+          enum: [impression, click, complete]
+          default: impression
+        placementId:
+          type: string
+        clickUrl:
+          type: string
+          format: uri
+
+    TransactionEventRequest:
+      type: object
+      required: [maidHash, campaignId]
+      properties:
+        maidHash:
+          type: string
+          description: SHA-256 hash of the mobile advertising ID
+        campaignId:
+          type: string
+          pattern: '^[a-zA-Z0-9_-]{1,128}$'
+        advertiserId:
+          type: string
+        transactionAmountCents:
+          type: integer
+          description: Transaction amount in cents
+        basketItems:
+          type: array
+          items:
+            type: object
+            properties:
+              sku:
+                type: string
+              name:
+                type: string
+              quantity:
+                type: integer
+              price_cents:
+                type: integer
+        poiId:
+          type: string
+          format: uuid
+          description: Point-of-interest where transaction occurred
+        occurredAt:
+          type: string
+          format: date-time
+
+    CohortExport:
+      type: object
+      properties:
+        exportId:
+          type: string
+        s3Url:
+          type: string
+          format: uri
+          description: Pre-signed S3 URL for the exported MAID list (expires in 24h)
+        maidCount:
+          type: integer
+          description: Number of unique MAIDs in the export

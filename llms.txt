@@ -1,0 +1,1077 @@
+# Trillboards Partner API
+# AI agents: Use this document to quickly understand our API
+
+## Overview
+Trillboards is a programmatic digital out-of-home (DOOH) advertising platform.
+Partners integrate our SDK into screens (vending machines, kiosks, digital signage)
+to display ads and earn competitive revenue share on all impressions.
+
+## API Base URL
+Production: https://api.trillboards.com/v1/partner
+Sandbox: https://sandbox-api.trillboards.com/v1/partner (coming soon)
+
+## Authentication
+All authenticated requests require Bearer token:
+```
+Authorization: Bearer trb_partner_xxxxx
+```
+
+Unauthenticated endpoints:
+- GET /device/{id}/ads
+- GET/POST /impression
+- POST /impressions/batch
+- POST /device/{id}/heartbeat
+
+## OpenAPI Specification
+Interactive docs (Scalar UI): https://api.trillboards.com/docs/partner
+Public API index: https://api.trillboards.com/docs/openapi.yaml
+Partner OpenAPI spec: https://api.trillboards.com/docs/openapi/partner-api.yaml
+Proof-of-Play OpenAPI spec: https://api.trillboards.com/docs/openapi/proof-of-play.yaml
+Attribution OpenAPI spec: https://api.trillboards.com/docs/openapi/attribution-api.yaml
+Programmatic & FEIN OpenAPI spec: https://api.trillboards.com/docs/openapi/programmatic-api.yaml
+OpenRTB Extensions schema spec: https://api.trillboards.com/docs/openapi/openrtb-extensions.yaml
+Attribution data model spec: https://api.trillboards.com/docs/openapi/attribution-data-models.yaml
+Partner integration guide: https://api.trillboards.com/docs/integrations/partner-native-bridge.md
+
+## Key Concepts
+
+### Partner
+- Company or developer integrating our ad platform
+- Receives API key on registration
+- Manages multiple devices
+- Earns competitive revenue share on impressions
+
+### Device
+- Physical screen displaying ads
+- Identified by fingerprint (e.g., "P_abc123") or external device ID
+- Can be vending_machine, kiosk, tablet, display, or other
+- Reports heartbeat for online status
+
+### Impression
+- Single ad view on a device
+- Tracked automatically by SDK or via API
+- Supports batch sync for offline scenarios
+- Idempotent on `impid + adid` (duplicate submissions are ignored)
+- Optional signature for verification: send `X-Trillboards-API-Key`, `X-Trillboards-Timestamp`, `X-Trillboards-Signature` where payload is `{ts}.{adid}.{impid}.{did}.{sid}.{aid}`
+- Optional display context: `display_mode`, `display_area_ratio`, `lbar_size`, `lbar_position`, `lbar_slot_index`, `lbar_slot_count`
+- Batch impressions can include per-impression `sig` and `sig_ts` fields using the same payload format
+
+## Quick Start Flow
+
+1. Register partner (POST /register)
+   - Returns API key (store securely!)
+   - Partners are auto-activated for instant onboarding
+   - If the partner owner has no password yet, the response includes portal_access with claim endpoints
+
+2. Claim portal account (if required)
+   - POST /claim/request with { email, partner_id } to request a one-time claim link
+   - POST /claim/verify with { token } to verify claim token
+   - POST /claim/complete with { token, password } to set a password and activate access
+   - Email verification can run in parallel; do not block claim flow on verification
+
+2. Register device (POST /device)
+   - Provide device_id, name, location
+   - Returns fingerprint, screen_id, and embed_url
+
+3. Display ads
+   - Load embed_url in WebView/iframe
+   - SDK handles ad rotation automatically
+   - Or fetch ads via GET /device/{id}/ads
+
+4. Track impressions
+   - SDK does this automatically
+   - Or POST /impression for custom tracking
+   - Batch offline impressions via POST /impressions/batch
+
+6. Check analytics (GET /analytics)
+   - View impressions, revenue, device stats
+
+## Endpoints Summary
+
+### Partner Management
+- POST /register - Register new partner, get API key
+- GET /info - Get partner details and stats
+ - POST /claim/request - Request account-claim token for portal access
+ - POST /claim/verify - Verify account-claim token
+ - POST /claim/complete - Set password and finalize account claim
+
+### Device Management
+- POST /device - Register/update a device
+- GET /devices - List all devices (paginated)
+- POST /devices/batch - Bulk register up to 100 devices
+- GET /device/{id} - Get device by ID/fingerprint
+- DELETE /device/{id} - Soft-delete device
+
+### CMS (Screen Content)
+- GET /screens/resolve?device_id=... - Resolve screen_id from device identifiers
+- GET /screens/{screenId}/default-streams - List background streams
+- POST /screens/{screenId}/default-streams - Create background stream (URL-based)
+- POST /screens/{screenId}/default-streams/upload - Upload video stream (multipart)
+- POST /screens/{screenId}/default-streams/images - Upload image carousel (multipart)
+- PUT /screens/{screenId}/default-streams/{streamId} - Update stream
+- DELETE /screens/{screenId}/default-streams/{streamId} - Delete stream
+- PUT /screens/{screenId}/default-streams/order - Reorder streams
+- GET /screens/{screenId}/l-bar - Get L-bar settings/content
+- PUT /screens/{screenId}/l-bar - Update L-bar settings/content
+- PUT /screens/{screenId}/l-bar/live-updates - Update L-bar live updates
+- GET /ads/self-promo - List self-promo ads for full embed
+- POST /ads/self-promo - Create self-promo ad (URL-based)
+- POST /ads/self-promo/upload - Upload self-promo ad media
+- POST /ads/self-promo/schedule - Schedule self-promo ad to screens
+- POST /ads/self-promo/{adId}/disable - Disable self-promo placements
+- GET /ads/self-promo/placements - List self-promo placements by screen
+
+### Ad Serving (No Auth Required)
+- GET /device/{id}/ads - Get ads for SDK (supports ETag caching, id = fingerprint or external device ID)
+  - Optional player-truth query params: slot_w, slot_h, orientation, muted, autoplay
+  - Returns header_bidding_settings with a VAST tag for programmatic (Floodgates/IMA)
+
+### Impression Tracking
+- GET /impression?adid=x&impid=y - Record single impression
+- POST /impression - Record single impression
+- POST /impressions/batch - Record up to 100 impressions
+
+### VAST Integration (Direct Google Integration)
+For enterprise partners who want to fetch ads directly from Google Ad Manager:
+- GET /vast/config - Get VAST tag URL template (cache for 1 hour)
+  - Returns template URL, targeting params, timeouts, and tracking endpoints
+  - Partner builds VAST URL, fetches from Google directly
+  - Trillboards NOT in critical ad path
+
+### Batch Tracking (High-Volume Impressions)
+For partners with 10,000+ screens:
+- POST /tracking/batch - Record up to 100 impressions with Ed25519 proofs
+- GET /tracking/.well-known/public-key - Get public key for proof verification (no auth)
+
+### Device Health
+- POST /device/{id}/heartbeat - Report device online status (id = fingerprint or external device ID)
+
+### Analytics
+- GET /analytics - Partner-level analytics with date filtering
+
+### Dashboard
+- GET /dashboard - Get partner dashboard overview with stats, earnings, top screens
+- GET /screens/{screenId}/analytics - Get screen-level analytics (period: 7d, 30d, 90d)
+
+### Team Management
+Team management endpoints require dual authentication:
+- API key in Authorization header: `Bearer trb_partner_xxxxx`
+- User JWT in X-User-Token header for write operations
+
+**Read Endpoints (API key only):**
+- GET /team - List all team members with roles and permissions
+- GET /team/invite/{token} - Get invitation details (public, for invite acceptance)
+
+**Write Endpoints (API key + User JWT + Owner role):**
+- POST /team/invite - Invite a team member (body: { email, role, name? })
+- POST /team/{membershipId}/resend - Resend invitation email
+- PATCH /team/{userId}/role - Change member role (body: { role })
+- DELETE /team/{userId} - Remove team member
+
+Team Roles:
+- **owner**: Full access (view all, manage team, request payouts, rotate API keys)
+- **admin**: View screens/analytics, edit screens, configure webhooks
+- **viewer**: View screens only
+
+### Earnings
+- GET /earnings - Get earnings summary (lifetime, this month, available for payout)
+- GET /earnings/transactions - Get transaction history (paginated)
+- GET /earnings/breakdown - Get earnings breakdown by day/week/screen
+- POST /earnings/payout - Request payout (requires Stripe Connect)
+
+### Quick Start
+- POST /quick-start - Register partner + first device in one call (no auth, rate limited)
+  - Returns API key, device credentials, SDK snippets, and configuration
+  - Single-call alternative to POST /register + POST /device
+
+### API Key Management
+- POST /api-key/rotate - Generate new API key with 24h grace period for old key
+
+### Stripe Connect (Partner Payouts)
+- POST /stripe/connect - Create Stripe Connect Express account
+- GET /stripe/onboarding-link - Get Stripe onboarding URL for identity/bank setup
+- GET /stripe/login-link - Get temporary Stripe Express dashboard link
+- GET /stripe/status - Get account status, payout readiness, and requirements
+- POST /stripe/payout - Request payout (min $5.00, requires active Stripe account)
+- GET /stripe/payouts - Get payout history (paginated)
+
+### Connect Dashboard (SDK Partner Dashboard)
+Pre-aggregated data for embedding in partner dashboards:
+- GET /connect/dashboard - Full dashboard: screens, impressions, earnings, charts, top screens
+- GET /connect/earnings - Daily/weekly earnings chart data
+- GET /connect/health - Screen health status (online/offline/never_connected)
+
+### Fleet Management
+For partners with large screen networks:
+- GET /fleet/overview - Fleet device counts, venue types, country breakdown
+- GET /fleet/analytics - 24h fleet-wide impressions, fill rate, CPM, attention
+- POST /fleet/command - Push command to fleet (reload, restart, screenshot, etc.)
+  - Commands: reload, update_settings, restart, screenshot, clear_cache, update_content, refresh_ads, update_config, get_state
+  - Supports filter by screenIds, venueType, country (max 500 devices/batch)
+- POST /fleet/settings - Update fleet-wide settings (header_bidding, content_preferences, display)
+
+### Venue Intelligence
+Real-world venue data from CTV audience sensing:
+- GET /venues/{venueId}/intelligence - Aggregated venue report with timeseries + dedup
+  - Query params: from, to (ISO dates, max 30 days), interval (5min/15min/1h/1d)
+- GET /venues/{screenId}/traffic - Hourly foot traffic patterns + busy score (0-10)
+- GET /venues/{screenId}/atmosphere - Current mood, noise, crowd density, music detection
+- GET /venues/nearby - Find nearby venues with live traffic (query: lat, lng, radiusKm)
+- GET /network/trends - Network-wide audience trends (period: 24h/7d/30d)
+
+### SSE Events (Real-Time Streaming)
+Server-Sent Events for live event streaming:
+- GET /events/stream - Open SSE connection (max 5 per partner)
+  - Query param: events (comma-separated filter, empty = all)
+  - Supports Last-Event-ID for reconnection + missed event replay
+  - 30s heartbeat to keep connection alive
+- GET /events/connections - List active SSE connections
+
+### API Usage & Rate Limits
+- GET /usage - API usage summary (query: start_date, end_date, default 30d, max 90d)
+- GET /usage/dashboard - Real-time usage dashboard (today + 7-day history)
+- GET /usage/rate-limit - Current rate limit status per tier (basic/developer/enterprise)
+
+### Network Configuration (White-Label)
+- GET /network-config - Get network config + parent partner ID
+- PUT /network-config - Full update (default_content_preferences, default_waterfall, branding)
+- PATCH /network-config - Partial update of specific nested fields
+
+### Device Commands
+- POST /device/{deviceId}/commands/{commandId}/ack - Acknowledge command execution
+
+### Sandbox (Beta — Integration Testing)
+Testing tools with synthetic data (24h TTL):
+- POST /sandbox/screen - Create sandbox screen (max 10 per partner)
+- POST /sandbox/event - Generate test event (17 event types supported)
+  - Events also delivered via SSE if connection is active
+- POST /sandbox/reset - Clear all sandbox data
+- GET /sandbox/status - Get sandbox screens, events, recent activity
+
+### Audience Intelligence (Beta)
+Advanced audience analytics:
+- GET /audience/live/{screenId} - Real-time audience data (all tiers)
+- GET /audience/heatmap - Geospatial audience heatmap (all tiers)
+- GET /audience/stats - Data availability statistics (all tiers)
+- GET /audience/lookalikes/{screenId} - Find similar audience screens (Developer+ tier)
+- GET /audience/predict/{screenId} - Predict audience by hour/day (Developer+ tier)
+
+### Audience Segments (Beta — Enterprise Tier)
+Custom audience targeting:
+- POST /audience/segments - Create segment with rules
+- GET /audience/segments - List all segments
+- GET /audience/segments/{segmentId} - Get segment details
+- PATCH /audience/segments/{segmentId} - Update segment
+- DELETE /audience/segments/{segmentId} - Delete segment
+- POST /audience/segments/{segmentId}/match - Find matching screens
+- POST /audience/segments/{segmentId}/reach - Estimate reach + revenue
+- POST /audience/segments/{segmentId}/vast-tag - Generate targeted VAST tag
+
+### Data API (Third-Party Access)
+Authenticated REST API for data partners (Place Exchange, OpenAI, Anthropic, etc.)
+to access audience intelligence, screen data, and semantic search.
+
+Base URL: https://api.trillboards.com/v1/data
+Authentication: X-API-Key header (not Bearer token)
+
+Scopes:
+- read:live — Real-time screen and audience data
+- read:historical — Historical audience metrics and aggregates
+- read:semantic — Scene embedding semantic search
+
+Endpoints:
+- GET /screens - List active screens (query: limit, offset, venue_type, country)
+- GET /screens/{screenId}/audience - Real-time audience snapshot from Redis
+- GET /screens/{screenId}/history - Historical audience_metrics (query: since, until, limit)
+- GET /semantic-search - Scene embedding similarity search (query: q, limit, since, min_similarity)
+- GET /lookalike - Find screens with similar audience profiles (query: screen_id, limit, min_similarity)
+- GET /aggregate - Aggregate analytics by group_by (venue_type|daypart|day_of_week|income_estimated_level|primary_mood) and metric (avg_face_count|avg_attention|income_confidence|max_face_count)
+- GET /stats - Data API stats (embedding counts, active screens, metrics volume)
+
+### Intent Catalog (Beta — Intent-Based Pricing)
+Purchase intent detection and pricing:
+- GET /intent/categories - List intent categories with CPM multipliers
+- GET /intent/categories/{categoryId} - Get category details + triggers
+- GET /intent/pricing/{screenId} - Real-time intent pricing for a screen
+
+## Data Access Tiers
+
+| Tier | Rate Limit | Access |
+|------|-----------|--------|
+| Basic | 200/min | Own screens, standard analytics |
+| Developer | 1,000/min | + Venue intelligence, lookalikes, predictions |
+| Enterprise | 5,000/min | + Audience segments, raw exports, SLA |
+
+## Rate Limits
+
+| Endpoint Type | Limit | Window |
+|--------------|-------|--------|
+| Registration | 5 | 1 hour |
+| Authenticated API | 1000 | 1 minute |
+| Ad serving | 100 | 1 minute |
+| Impressions | 500 | 1 minute |
+| Batch impressions | 100 | 1 minute |
+| Heartbeat | 60 | 1 minute |
+| Venue intelligence | 100 | 1 minute |
+| Audience intelligence | 100 | 1 minute |
+| Data API | 60 | 1 minute |
+| Bulk device operations | 20 | 1 minute |
+
+Rate limit headers returned on all responses:
+- X-RateLimit-Limit
+- X-RateLimit-Remaining
+- X-RateLimit-Reset
+
+## Error Responses
+
+All errors follow a consistent format with helpful guidance:
+```json
+{
+  "success": false,
+  "error": {
+    "type": "invalid_request_error",
+    "code": "authentication_required",
+    "message": "Authentication required. Provide your Partner API key in the Authorization header.",
+    "param": "Authorization",
+      "doc_url": "https://api.trillboards.com/docs/integrations/partner-native-bridge.md#errors",
+    "help": {
+      "summary": "Send your Partner API key in the Authorization header.",
+      "example": "Authorization: Bearer trb_partner_xxxxx",
+      "docs": "https://api.trillboards.com/docs/integrations/partner-native-bridge.md",
+      "portal_url": "https://trillboards.com/earner"
+    }
+  },
+  "request_id": "req_123"
+}
+```
+
+HTTP Status Codes:
+- 400: Bad request (validation error)
+- 401: Unauthorized (invalid/missing API key)
+- 404: Resource not found
+- 429: Rate limit exceeded
+- 500: Server error
+
+## Example: Register Device
+
+Request:
+```bash
+curl -X POST https://api.trillboards.com/v1/partner/device \
+  -H "Authorization: Bearer trb_partner_xxxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id": "vending-001-nyc",
+    "name": "NYC Office Lobby Vending",
+    "device_type": "vending_machine",
+    "location": {
+      "lat": 40.7128,
+      "lng": -74.0060,
+      "venue_type": "office",
+      "city": "New York",
+      "state": "NY",
+      "country": "US"
+    }
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "message": "Device registered",
+  "data": {
+    "device_id": "6507a1b2c3d4e5f6g7h8i9j0",
+    "external_device_id": "vending-001-nyc",
+    "fingerprint": "P_a1b2c3d4e5f6g7h8",
+    "screen_id": "6507a1b2c3d4e5f6g7h8aa11",
+    "status": "active",
+    "embed_url": "https://screen.trillboards.com?fp=P_a1b2c3d4e5f6g7h8",
+    "enrichment_status": "pending"
+  }
+}
+```
+
+## Example: Get Partner Dashboard
+
+Request:
+```bash
+curl https://api.trillboards.com/v1/partner/dashboard \
+  -H "Authorization: Bearer trb_partner_xxxxx"
+```
+
+Response:
+```json
+{
+  "success": true,
+  "data": {
+    "partner": { "name": "Acme Vending Co", "slug": "acmevending", "status": "active" },
+    "stats": {
+      "total_screens": 150,
+      "active_screens": 142,
+      "offline_screens": 8,
+      "total_impressions_today": 45000,
+      "total_impressions_week": 315000,
+      "total_impressions_month": 1350000
+    },
+    "earnings": {
+      "revenue_share_percent": 70,
+      "total_earned_cents": 4500000,
+      "available_payout_cents": 125000,
+      "pending_payout_cents": 0
+    },
+    "top_screens": [...],
+    "recent_activity": [...],
+    "stripe_status": { "account_status": "active" }
+  }
+}
+```
+
+## Example: Invite Team Member
+
+Request:
+```bash
+curl -X POST https://api.trillboards.com/v1/partner/team/invite \
+  -H "Authorization: Bearer trb_partner_xxxxx" \
+  -H "X-User-Token: <owner_jwt_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "teammate@company.com",
+    "role": "admin",
+    "name": "Jane Doe"
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "message": "Invitation sent successfully",
+  "data": {
+    "membership_id": "6507a1b2c3d4e5f6g7h8i9j0",
+    "email": "teammate@company.com",
+    "role": "admin",
+    "status": "pending",
+    "expires_at": "2026-02-02T12:00:00.000Z"
+  }
+}
+```
+
+## Example: Data API Semantic Search
+
+Request:
+```bash
+curl "https://api.trillboards.com/v1/data/semantic-search?q=sports%20bar%20crowd&limit=10&since=24h" \
+  -H "X-API-Key: trb_data_xxxxx"
+```
+
+Response:
+```json
+{
+  "query": "sports bar crowd",
+  "results_count": 3,
+  "time_window": "24h",
+  "results": [
+    {
+      "screen_id": "6507a1b2c3d4e5f6g7h8i9j0",
+      "scene_description": "Lively sports bar with crowd watching game on multiple screens, high energy",
+      "similarity": 0.89,
+      "window_end": "2026-02-28T02:30:00.000Z"
+    }
+  ]
+}
+```
+
+## Example: Data API Aggregate Analytics
+
+Request:
+```bash
+curl "https://api.trillboards.com/v1/data/aggregate?group_by=daypart&metric=avg_attention&since=7d" \
+  -H "X-API-Key: trb_data_xxxxx"
+```
+
+Response:
+```json
+{
+  "group_by": "daypart",
+  "metric": "avg_attention",
+  "time_window": "7d",
+  "aggregations": [
+    { "group_key": "evening", "sample_count": 1250, "avg_value": 0.72, "min_value": 0.15, "max_value": 0.98 },
+    { "group_key": "afternoon", "sample_count": 980, "avg_value": 0.65, "min_value": 0.10, "max_value": 0.95 }
+  ]
+}
+```
+
+## SDK Integration
+
+For web-based displays, load the embed_url in an iframe or WebView:
+```html
+<iframe src="https://screen.trillboards.com?fp=P_abc123"
+        style="width:100%;height:100%;border:none;">
+</iframe>
+```
+
+The SDK automatically:
+- Fetches and rotates ads
+- Caches ads for offline playback
+- Tracks impressions
+- Reports heartbeat status
+
+For programmatic-only usage (default for the Lite SDK), trigger ads via:
+```
+window.TrillboardsLite.show()
+```
+Direct ad fallback is opt-in via the Lite SDK `waterfall` options
+(`programmatic_then_direct` or `direct_only`).
+
+---
+
+# Proof-of-Play API
+# Cryptographically signed ad impression verification
+
+## Overview
+Every ad impression on Trillboards is signed with Ed25519 cryptography.
+Advertisers can export proofs and share them with third-party auditors
+who verify signatures independently using our public key.
+
+## API Base URL
+Production: https://api.trillboards.com/v1/advertiser/proof
+
+## OpenAPI Specification
+Interactive docs (Scalar): https://api.trillboards.com/docs/proof-of-play
+Proof-of-Play OpenAPI spec: https://api.trillboards.com/docs/openapi/proof-of-play.yaml
+
+## Philosophy: Open Verification, Closed Discovery
+- PUBLIC: Signature verification (anyone can verify a proof they receive)
+- RESTRICTED: Data discovery (only campaign owners can fetch proofs)
+
+## Public Endpoints (No Auth)
+
+### GET /.well-known/public-key
+Returns Ed25519 public key for third-party signature verification.
+
+Response:
+```json
+{
+  "success": true,
+  "publicKey": "a5a9c43785680c62ebcd01ec49a0d6055fd140023df0f142c3e37c6abafce34f",
+  "algorithm": "ed25519",
+  "version": "v2"
+}
+```
+
+### POST /verify-proof
+Verify a signature without needing the private key.
+
+Request:
+```json
+{
+  "signature": "ed25519=<hex>",
+  "timestamp": 1705401600000,
+  "adId": "campaign-abc123",
+  "impressionId": "507f1f77bcf86cd799439011",
+  "screenId": "screen-xyz789",
+  "deviceId": "device-456"
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "verification": { "valid": true, "version": "v2" }
+}
+```
+
+### GET /signature-info
+Returns signature format documentation for integrators.
+
+## Authenticated Endpoints (Bearer Token Required)
+
+### GET /campaigns/{campaignId}/proof
+Get signed proofs for a campaign. Owner only.
+Supports cursor-based pagination via `cursor` query param.
+
+Query params: startDate, endDate, limit (default 1000), cursor
+
+### GET /screens/{screenId}/proof
+Get proofs for a screen. Screen owner or advertiser who ran campaigns on it.
+Supports cursor-based pagination.
+
+### GET /campaigns/{campaignId}/audience-proof
+Get aggregated audience data with privacy protection. Owner only.
+
+### POST /campaigns/{campaignId}/export-proof
+Export proofs as JSON or CSV. Owner only.
+
+## Signature Format
+
+Version: v2 (Ed25519, current)
+Payload: `version.timestamp.adId.impressionId.screenId.deviceId`
+Signature prefix: `ed25519=`
+
+Example proof object:
+```json
+{
+  "impressionId": "507f1f77bcf86cd799439011",
+  "adId": "campaign-abc123",
+  "screenId": "screen-xyz789",
+  "deviceId": "device-456",
+  "timestamp": "2026-01-16T12:00:00.000Z",
+  "eventType": "complete",
+  "signature": "ed25519=a1b2c3d4e5f6...",
+  "signatureVersion": "v2"
+}
+```
+
+## Verification Example (Node.js)
+
+```javascript
+const crypto = require('crypto');
+
+const PUBLIC_KEY_HEX = 'a5a9c43785680c62ebcd01ec49a0d6055fd140023df0f142c3e37c6abafce34f';
+
+function verifyProof(proof) {
+  const payload = `v2.${proof.timestamp}.${proof.adId}.${proof.impressionId}.${proof.screenId}.${proof.deviceId}`;
+  const signatureHex = proof.signature.replace('ed25519=', '');
+  const signatureBytes = Buffer.from(signatureHex, 'hex');
+
+  const publicKey = crypto.createPublicKey({
+    key: Buffer.concat([
+      Buffer.from('302a300506032b6570032100', 'hex'),
+      Buffer.from(PUBLIC_KEY_HEX, 'hex')
+    ]),
+    format: 'der',
+    type: 'spki'
+  });
+
+  return crypto.verify(null, Buffer.from(payload), publicKey, signatureBytes);
+}
+```
+
+## Verification Example (Python)
+
+```python
+from nacl.signing import VerifyKey
+
+PUBLIC_KEY_HEX = 'a5a9c43785680c62ebcd01ec49a0d6055fd140023df0f142c3e37c6abafce34f'
+
+def verify_proof(proof):
+    verify_key = VerifyKey(bytes.fromhex(PUBLIC_KEY_HEX))
+    payload = f"v2.{proof['timestamp']}.{proof['adId']}.{proof['impressionId']}.{proof['screenId']}.{proof['deviceId']}"
+    signature_bytes = bytes.fromhex(proof['signature'].replace('ed25519=', ''))
+    try:
+        verify_key.verify(payload.encode(), signature_bytes)
+        return True
+    except:
+        return False
+```
+
+## Legacy Support
+Version v1 (HMAC-SHA256) is deprecated but still supported.
+Signature prefix: `sha256=`
+Use v2 Ed25519 for third-party verification.
+
+---
+
+---
+
+# Attribution & Measurement API
+# Closed-loop DOOH attribution with attention-verified impressions
+
+## Overview
+Trillboards provides the only deterministic DOOH attribution engine:
+on-device computer vision measures actual human attention, third-party
+mobile signals prove store visits, and Bayesian experiments measure
+incremental lift. Every metric is MEASURED, not estimated.
+
+## API Base URL
+Production: https://api.trillboards.com/v1/advertiser/attribution
+Authentication: Bearer JWT token
+
+## OpenAPI Specification
+Interactive docs (Scalar UI): https://api.trillboards.com/docs/attribution
+Attribution OpenAPI spec: https://api.trillboards.com/docs/openapi/attribution-api.yaml
+Attribution-focused AI guide: https://api.trillboards.com/llms-attribution.txt
+
+## Key Concepts
+
+### aCPM (Attention CPM)
+Cost per 1,000 attention-verified impressions. Unlike standard CPM, aCPM only
+counts impressions where someone was actually looking at the screen, as measured
+by on-device face detection and gaze tracking.
+
+### Incremental Lift
+Percentage increase in store visits caused by the campaign, measured via
+geo-holdout experiments with DMA-matched control groups. Not correlation — causation.
+
+### CPIV (Cost Per Incremental Visit)
+Total media cost / number of visits that would NOT have happened without the campaign.
+The true cost of driving a store visit.
+
+### Weighted Confidence
+base_match_confidence * (1 + attention_weight). Combines spatial proximity
+with FEIN attention verification for a single confidence score.
+
+## Endpoints Summary
+
+### Campaign Attribution
+- GET /campaign/{id} — Comprehensive attribution summary (reach, visits, lift, CPIV)
+- GET /campaign/{id}/timeseries — Daily attribution metrics over time
+- GET /campaign/{id}/heatmap — Geospatial exposure and conversion density
+- GET /campaign/{id}/journey — Attribution funnel (exposure -> visit -> transaction)
+
+### Attention Metrics (Unique to Trillboards)
+- GET /campaign/{id}/attention — aCPM, attention scores, dwell, emotion breakdown
+- GET /campaign/{id}/attention/creative — Per-creative attention comparison
+- GET /campaign/{id}/attention/timeseries — Attention fatigue detection over time
+
+### Cross-Channel Attribution
+- GET /campaign/{id}/multi-touch — Channel credit allocation (DOOH vs mobile vs web vs store)
+- GET /campaign/{id}/cross-channel-journey — Sankey flow data for path visualization
+- GET /campaign/{id}/channel-roas — Per-channel ROAS comparison
+
+### Incrementality Measurement
+- POST /experiment — Create geo-holdout, ghost ad, or PSA control experiment
+- GET /experiment/{id} — Experiment results (Bayesian + frequentist)
+- GET /experiment/{id}/power — Sample size needed for target MDE
+- GET /campaign/{id}/incrementality — Campaign-level Bayesian uplift
+
+### Creative Attribution
+- GET /campaign/{id}/creative-attribution — Creative x outcome x context correlation
+- GET /campaign/{id}/creative-attribution/{creativeId}/timeseries — Creative fatigue over time
+
+### Signal Transparency
+- GET /campaign/{id}/signal-quality — Data coverage, freshness, and confidence
+- GET /campaign/{id}/methodology — Human-readable explanation of attribution methodology
+
+### Cohort Export
+- POST /campaign/{id}/cohort/export — Export MAID list to TTD, DV360, or Meta
+
+## Cross-Channel Event Ingestion
+- POST /v1/attribution/event/mobile — DSP postback (impressions/clicks)
+- GET /v1/attribution/pixel/{advertiserId}/{campaignId} — 1x1 web tracking pixel
+- POST /v1/attribution/event/transaction — Transaction/purchase data
+
+---
+
+# OpenRTB 2.6 Signal Extensions
+# Proprietary signals in every bid request
+
+## Overview
+Trillboards injects 30+ proprietary signals into OpenRTB 2.6 DOOH bid requests.
+These signals are MEASURED by on-device edge AI, not estimated.
+
+## Documentation
+Interactive docs (Scalar UI): https://api.trillboards.com/docs/openrtb-extensions
+Schema spec: https://api.trillboards.com/docs/openapi/openrtb-extensions.yaml
+Executable programmatic routes: https://api.trillboards.com/docs/openapi/programmatic-api.yaml
+
+## Signal Namespaces
+
+### ext.trillboards — Real-Time Audience (10-30s fresh)
+- attention_score: Fraction of faces looking at screen (0-1, gaze detection)
+- audience_count: Average face count
+- crowd_density: Peak face count
+- ad_receptivity: Audio-derived venue receptivity (0-1, YAMNet TFLite)
+- emotional_engagement: Facial expression engagement (0-1)
+- mood: Venue mood (energetic/calm/focused/social/neutral)
+- estimated_occupancy: Venue occupancy estimate
+- avg_dwell_ms: Average face dwell time
+- signals_age_ms: Signal freshness (lower = fresher)
+- reliability_score: Screen reliability from unified telemetry
+- audience_quality: Audience data quality score
+- screen_quality_composite: Combined quality score
+
+### ext.trb.vas — Verified Attention Seconds (7-day rolling)
+- predicted_vas: Predicted VAS for next impression
+- historical_vas_avg: 7-day average VAS
+- median_vas, p90_vas: Distribution metrics
+- avg_face_count, avg_attention_score: Historical averages
+
+### ext.trb.intent — Purchase Intent (10-30s fresh)
+- score: Composite intent score (0-1)
+- purchase_stage: READY_TO_BUY / COMPARING / CONSIDERING / BROWSING / NONE
+- categories: Detected product interest categories
+- brand_mentions: Whether brand names detected in ambient audio
+
+### ext.trb.weather — Contextual Weather (60-min cache)
+- temp_f, humidity, condition, uv_index, wind_mph, is_raining
+- temp_segment: hot / warm / cool / cold
+
+### ext.trb.foot_traffic — Venue Occupancy (10-30s fresh)
+- current_audience, estimated_occupancy, avg_dwell_seconds
+- traffic_tier: very_low / low / medium / high / very_high
+
+### user.data[] — IAB Audience Taxonomy 1.1 Segments
+Income (1001-1005), Lifestyle (2001-2020), Purchase Intent (3001-3003)
+Plus seller-defined segments: venue (trb_vn_*), geo (trb_geo_*),
+traffic (trb_trf_*), dwell (trb_dwl_*), daypart (trb_dpt_*), quality (trb_qly_*)
+
+---
+
+# FEIN Edge AI API
+# On-device computer vision and audio classification
+
+## Overview
+FEIN (Face-detection Edge Intelligence) runs ML Kit and YAMNet TFLite
+on CTV tablets. The FEIN API exposes analytics, webhooks, and SSE streaming.
+
+## Documentation
+Interactive docs (Scalar UI): https://api.trillboards.com/docs/programmatic
+Programmatic & FEIN OpenAPI spec: https://api.trillboards.com/docs/openapi/programmatic-api.yaml
+
+## FEIN Analytics (read, X-API-Key auth)
+- GET /openrtb/v2/fein/creative-venue-performance — Creative x venue matrix
+- GET /openrtb/v2/fein/fill-rate-by-venue — Fill rates by venue type
+- GET /openrtb/v2/fein/screen-intelligence/{screenId} — Per-screen intelligence
+- GET /openrtb/v2/fein/model-status — ML model deployment status
+- GET /openrtb/v2/fein/audience-segments — Segment distribution
+- GET /openrtb/v2/fein/inference-history — Historical inference results
+- GET /openrtb/v2/fein/readiness — System readiness check
+
+## FEIN Webhooks & SSE
+- POST /openrtb/v2/fein/webhooks — Register webhook for real-time events
+- GET /openrtb/v2/fein/webhooks — List registered webhooks
+- DELETE /openrtb/v2/fein/webhooks/{id} — Remove webhook
+- GET /openrtb/v2/fein/stream — SSE event stream (inference_complete, attribution_updated, model_slice_updated, creative_outcome_updated)
+
+---
+
+# Attribution Data Model
+# 6-layer pipeline from signal to insight
+
+## Documentation
+Interactive docs (Scalar UI): https://api.trillboards.com/docs/attribution-data-models
+Attribution data model spec: https://api.trillboards.com/docs/openapi/attribution-data-models.yaml
+
+## Pipeline Layers
+
+### Layer 1: Signal Ingestion
+device_signals (Intuizi mobile pings) + poi_reference (brand locations)
+
+### Layer 2: Exposure Matching
+exposure_device_matches — PostGIS ST_DWithin joins device signals with ad plays
+
+### Layer 3: Attention Enrichment
+attention_exposure_matches — FEIN edge AI signals joined with exposures
+
+### Layer 4: Identity Resolution
+identity_nodes + identity_edges + household_clusters — cross-device graph
+
+### Layer 5: Attribution
+touchpoint_events + attribution_chains — multi-touch credit allocation
+
+### Layer 6: Measurement
+incrementality_experiments + incrementality_results + creative_attribution_performance
+
+## Privacy Architecture
+All identifiers SHA-256 hashed. K-anonymity (min group size 5).
+FEIN inference on-device only. No PII stored. Partitioned tables with retention policies.
+
+---
+
+## Support
+
+- Public API index: https://api.trillboards.com/docs/openapi.yaml
+- Documentation: https://trillboards.com/developers
+- Email: developers@trillboards.com
+- Partner API docs: https://api.trillboards.com/docs/partner
+- Proof-of-Play API docs: https://api.trillboards.com/docs/proof-of-play
+- Attribution API docs: https://api.trillboards.com/docs/attribution
+- Programmatic & FEIN docs: https://api.trillboards.com/docs/programmatic
+- OpenRTB Extensions docs: https://api.trillboards.com/docs/openrtb-extensions
+- Data Model docs: https://api.trillboards.com/docs/attribution-data-models
+- Partner API spec: https://api.trillboards.com/docs/openapi/partner-api.yaml
+- Proof-of-Play API spec: https://api.trillboards.com/docs/openapi/proof-of-play.yaml
+- Attribution API spec: https://api.trillboards.com/docs/openapi/attribution-api.yaml
+- Programmatic & FEIN API spec: https://api.trillboards.com/docs/openapi/programmatic-api.yaml
+- OpenRTB Extensions schema spec: https://api.trillboards.com/docs/openapi/openrtb-extensions.yaml
+- Attribution data model spec: https://api.trillboards.com/docs/openapi/attribution-data-models.yaml
+- Attribution AI guide: https://api.trillboards.com/llms-attribution.txt
+- Pricing endpoint: https://api.trillboards.com/v1/partner/pricing
+
+---
+
+# Machine-Readable Pricing
+# Usage-based graduated pricing for all products
+
+## Endpoint
+GET https://api.trillboards.com/v1/partner/pricing
+
+No authentication required. Returns the full pricing catalog in JSON.
+
+## MCP Tool
+Use the `get_pricing` MCP tool (no auth required) to fetch the same data
+programmatically via MCP. Optionally filter by product:
+
+```json
+{ "name": "get_pricing", "arguments": { "product": "data_api" } }
+```
+
+## Pricing Model
+All products use graduated usage-based pricing:
+- **Free tier**: Every product has a generous free tier (no credit card needed)
+- **Graduated volume**: Unit cost decreases as usage increases
+- **Committed use**: Pre-commit to monthly spend for 10-40% additional discount
+- **Annual discount**: Additional 10% off on annual commitments
+
+## Products & Free Tiers
+| Product | Free Tier | Unit |
+|---------|-----------|------|
+| Data API | 10,000/mo | API calls |
+| Proof of Play | 1,000/mo | Proofs |
+| Attribution | First campaign | Free trial |
+| Data Marketplace | 5,000/mo | Queries |
+| Partner Platform | Unlimited | Free forever (rev share) |
+| Programmatic | Unlimited | Free (20% media fee) |
+| FEIN Edge AI | Unlimited | Free for screen owners |
+
+## Usage Tracking
+Authenticated partners can check usage via:
+- MCP tool: `get_usage_summary` (requires API key)
+- REST: GET /v1/partner/usage
+
+---
+
+# AI Agent Quick Start (Zero Human Interaction)
+# 5-step fully automated integration flow
+
+## Step 1: Discover
+Fetch pricing and capabilities — no signup required:
+```bash
+curl https://api.trillboards.com/v1/partner/pricing
+curl https://api.trillboards.com/.well-known/adagents.json
+```
+
+Or via MCP:
+```json
+{ "name": "get_pricing" }
+{ "name": "get_adcp_capabilities" }
+```
+
+## Step 2: Register
+Create a partner account and receive an API key instantly:
+```bash
+curl -X POST https://api.trillboards.com/v1/partner/register \
+  -H "Content-Type: application/json" \
+  -d '{"company_name":"Acme AI","email":"ai@acme.com","contact_name":"AI Agent"}'
+```
+
+Or via MCP:
+```json
+{ "name": "register_partner", "arguments": { "company_name": "Acme AI", "email": "ai@acme.com" } }
+```
+
+Save the returned `api_key` — it is shown only once.
+
+## Step 3: Discover Inventory
+Browse available screens filtered by venue, location, or audience:
+```json
+{ "name": "discover_inventory", "arguments": { "venue_types": ["retail"], "location": { "city": "New York" } } }
+```
+
+## Step 4: Create Campaign
+Launch a media buy targeting discovered screens:
+```json
+{
+  "name": "create_media_buy",
+  "arguments": {
+    "name": "Q1 Retail Push",
+    "buy_spec": {
+      "venue_types": ["retail"],
+      "budget": { "daily_usd": 100, "bid_cpm": 4.0 }
+    },
+    "creative": { "url": "https://cdn.acme.com/ad.mp4", "type": "video", "duration_seconds": 15 }
+  }
+}
+```
+
+## Step 5: Monitor & Optimize
+Check delivery, provide feedback, log conversions:
+```json
+{ "name": "get_media_buy_delivery", "arguments": { "media_buy_id": "mbuy_..." } }
+{ "name": "get_usage_summary" }
+```
+
+Total time: Under 60 seconds. No human approval gates. No credit card for free tier.
+
+---
+
+# MCP Connection Details
+# Connect from Claude Desktop, Cursor, or any MCP client
+
+## Server URL
+https://api.trillboards.com/mcp
+
+## Transport
+Streamable HTTP (MCP Protocol Version 2025-11-25)
+
+## Authentication
+For unauthenticated tools (get_pricing, get_adcp_capabilities, register_partner):
+No headers required.
+
+For authenticated tools:
+```
+Authorization: Bearer trb_partner_xxxxx
+```
+
+Or:
+```
+X-Trillboards-API-Key: trb_partner_xxxxx
+```
+
+## Claude Desktop Configuration
+Add to your `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "trillboards": {
+      "url": "https://api.trillboards.com/mcp",
+      "headers": {
+        "Authorization": "Bearer trb_partner_xxxxx"
+      }
+    }
+  }
+}
+```
+
+## Cursor Configuration
+Add to your `.cursor/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "trillboards": {
+      "url": "https://api.trillboards.com/mcp",
+      "headers": {
+        "Authorization": "Bearer trb_partner_xxxxx"
+      }
+    }
+  }
+}
+```
+
+## Agent Identification
+Set `X-MCP-Client-Name` header to identify your agent (optional but recommended):
+```
+X-MCP-Client-Name: my-trading-desk-agent
+```
+
+## Available Tools (Unauthenticated)
+- get_pricing — Pricing catalog with free tiers
+- get_adcp_capabilities — Platform capability discovery
+- register_partner — Instant partner registration
+- get_device_ads — Fetch ads for a device
+- record_impression — Record a single impression
+- batch_impressions — Record up to 100 impressions
+- device_heartbeat — Report device online status
+
+## Available Tools (Authenticated)
+- get_partner_info, register_device, list_devices, get_device, delete_device
+- get_analytics, get_usage_summary
+- create_webhook, list_webhooks, update_webhook, delete_webhook, test_webhook, get_webhook_deliveries
+- discover_inventory, get_live_audience, get_audience_forecast
+- create_campaign, get_campaign_performance, get_network_stats
+- get_signals, activate_signal
+- get_products, create_media_buy, update_media_buy, sync_creatives
+- get_media_buy_delivery, provide_performance_feedback, log_event

@@ -1,0 +1,204 @@
+openapi: 3.0.3
+info:
+  title: Trillboards Public API Index
+  version: 2026-03-09
+  description: |
+    Machine-readable catalog of Trillboards' public API surfaces for humans, SDKs,
+    and AI agents.
+
+    Use this document as the canonical discovery entrypoint. It does not attempt to
+    flatten every API into one giant contract. Instead, it points to the correct
+    OpenAPI spec and interactive documentation for each public surface:
+
+    - Partner API for device registration, ad serving, and partner webhooks
+    - Proof-of-Play API for cryptographically signed impression verification
+    - Attribution API for closed-loop DOOH measurement
+    - Programmatic & FEIN API for OpenRTB, VAST, OMSDK, audience intelligence, and FEIN
+    - OpenRTB Extensions spec for outbound bid-request signal schemas
+    - Attribution Data Model Ontology for the measurement data layer
+
+    AI agents should combine this index with `https://api.trillboards.com/llms.txt`
+    and `https://api.trillboards.com/.well-known/adagents.json`.
+  contact:
+    name: Trillboards Developer Support
+    email: developers@trillboards.com
+servers:
+  - url: https://api.trillboards.com
+    description: Production
+
+tags:
+  - name: API Catalog
+    description: Raw machine-readable specs for each public API surface
+  - name: Interactive Documentation
+    description: Human-readable interactive documentation
+  - name: AI Discovery
+    description: AI-agent discovery documents and transports
+
+paths:
+  /docs/openapi/partner-api.yaml:
+    get:
+      tags: [API Catalog]
+      operationId: getPartnerApiSpec
+      summary: Raw Partner API OpenAPI YAML
+      responses:
+        '200':
+          description: Partner API OpenAPI 3.0.3 document
+
+  /docs/openapi/proof-of-play.yaml:
+    get:
+      tags: [API Catalog]
+      operationId: getProofOfPlayApiSpec
+      summary: Raw Proof-of-Play API OpenAPI YAML
+      responses:
+        '200':
+          description: Proof-of-Play API OpenAPI 3.0.3 document
+
+  /docs/openapi/attribution-api.yaml:
+    get:
+      tags: [API Catalog]
+      operationId: getAttributionApiSpec
+      summary: Raw Attribution API OpenAPI YAML
+      responses:
+        '200':
+          description: Attribution API OpenAPI 3.0.3 document
+
+  /docs/openapi/programmatic-api.yaml:
+    get:
+      tags: [API Catalog]
+      operationId: getProgrammaticApiSpec
+      summary: Raw Programmatic & FEIN API OpenAPI YAML
+      responses:
+        '200':
+          description: Programmatic/OpenRTB/FEIN OpenAPI 3.0.3 document
+
+  /docs/openapi/openrtb-extensions.yaml:
+    get:
+      tags: [API Catalog]
+      operationId: getOpenRtbExtensionsSpec
+      summary: Raw OpenRTB 2.6 extensions schema YAML
+      responses:
+        '200':
+          description: OpenRTB extension schema reference
+
+  /docs/openapi/attribution-data-models.yaml:
+    get:
+      tags: [API Catalog]
+      operationId: getAttributionDataModelsSpec
+      summary: Raw attribution data-model ontology YAML
+      responses:
+        '200':
+          description: Attribution ontology and schema catalog
+
+  /docs/partner:
+    get:
+      tags: [Interactive Documentation]
+      operationId: openPartnerDocs
+      summary: Partner API interactive documentation
+      responses:
+        '200':
+          description: Scalar UI for the Partner API
+
+  /docs/proof-of-play:
+    get:
+      tags: [Interactive Documentation]
+      operationId: openProofOfPlayDocs
+      summary: Proof-of-Play interactive documentation
+      responses:
+        '200':
+          description: Scalar UI for proof verification and export workflows
+
+  /docs/attribution:
+    get:
+      tags: [Interactive Documentation]
+      operationId: openAttributionDocs
+      summary: Attribution API interactive documentation
+      responses:
+        '200':
+          description: Scalar UI for attribution and incrementality workflows
+
+  /docs/programmatic:
+    get:
+      tags: [Interactive Documentation]
+      operationId: openProgrammaticDocs
+      summary: Programmatic & FEIN interactive documentation
+      responses:
+        '200':
+          description: Scalar UI for OpenRTB, VAST, FEIN, OMSDK, and telemetry routes
+
+  /docs/openrtb-extensions:
+    get:
+      tags: [Interactive Documentation]
+      operationId: openOpenRtbExtensionDocs
+      summary: OpenRTB extensions interactive documentation
+      responses:
+        '200':
+          description: Scalar UI for outbound bid-request extension schemas
+
+  /docs/attribution-data-models:
+    get:
+      tags: [Interactive Documentation]
+      operationId: openAttributionOntologyDocs
+      summary: Attribution ontology interactive documentation
+      responses:
+        '200':
+          description: Scalar UI for ontology navigation and schema browsing
+
+  /llms.txt:
+    get:
+      tags: [AI Discovery]
+      operationId: getLlmsTxt
+      summary: AI-readable documentation manifest
+      responses:
+        '200':
+          description: Top-level AI-readable docs index
+
+  /.well-known/adagents.json:
+    get:
+      tags: [AI Discovery]
+      operationId: getAdagentsDiscovery
+      summary: AdCP seller-agent discovery document
+      responses:
+        '200':
+          description: Authorized agent and property discovery metadata
+
+  /mcp:
+    post:
+      tags: [AI Discovery]
+      operationId: connectMcpServer
+      summary: Trillboards MCP server
+      description: Streamable HTTP MCP endpoint for AI-agent access to seller tools.
+      responses:
+        '200':
+          description: MCP protocol response
+
+x-trillboards-public-specs:
+  - id: partner
+    title: Trillboards Partner API
+    yaml_url: https://api.trillboards.com/docs/openapi/partner-api.yaml
+    ui_url: https://api.trillboards.com/docs/partner
+    audience: partners_and_screen_integrators
+  - id: proof-of-play
+    title: Trillboards Proof-of-Play API
+    yaml_url: https://api.trillboards.com/docs/openapi/proof-of-play.yaml
+    ui_url: https://api.trillboards.com/docs/proof-of-play
+    audience: advertisers_and_auditors
+  - id: attribution
+    title: Trillboards Attribution API
+    yaml_url: https://api.trillboards.com/docs/openapi/attribution-api.yaml
+    ui_url: https://api.trillboards.com/docs/attribution
+    audience: advertisers_and_measurement_partners
+  - id: programmatic
+    title: Trillboards Programmatic & FEIN API
+    yaml_url: https://api.trillboards.com/docs/openapi/programmatic-api.yaml
+    ui_url: https://api.trillboards.com/docs/programmatic
+    audience: dsp_ssp_and_data_consumers
+  - id: openrtb-extensions
+    title: Trillboards OpenRTB 2.6 Extensions
+    yaml_url: https://api.trillboards.com/docs/openapi/openrtb-extensions.yaml
+    ui_url: https://api.trillboards.com/docs/openrtb-extensions
+    audience: bidding_algorithms_and_signal_consumers
+  - id: attribution-data-models
+    title: Trillboards Attribution Data Model Ontology
+    yaml_url: https://api.trillboards.com/docs/openapi/attribution-data-models.yaml
+    ui_url: https://api.trillboards.com/docs/attribution-data-models
+    audience: measurement_engineers_and_warehouse_consumers

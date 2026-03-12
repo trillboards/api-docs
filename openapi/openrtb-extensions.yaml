@@ -1,0 +1,918 @@
+openapi: 3.0.3
+info:
+  title: Trillboards OpenRTB 2.6 Extension Schema Reference
+  version: 2026-03-v1
+  description: |
+    Schema reference for Trillboards' proprietary OpenRTB 2.6 bid request extensions.
+    This is NOT a bid endpoint specification — it documents the SIGNALS injected
+    into every bid request sent to DSPs so engineers can build bidding algorithms
+    that leverage Trillboards' unique audience intelligence.
+
+    ## How to Use This Document
+
+    When Trillboards sends a bid request to your DSP, it includes standard OpenRTB 2.6
+    fields plus the proprietary extensions documented here. Your bidding algorithm can
+    use these signals to bid higher on high-value inventory.
+
+    ## Extension Namespaces
+
+    | Namespace | What It Contains | Freshness |
+    |-----------|-----------------|-----------|
+    | `ext.trillboards` | Real-time audience signals from FEIN edge AI | 10-30 seconds |
+    | `ext.trb.vas` | Verified Attention Seconds (historical quality) | 7-day rolling |
+    | `ext.trb.intent` | Purchase intent from speech analysis | 10-30 seconds |
+    | `ext.trb.weather` | Contextual weather conditions | 60-minute cache |
+    | `ext.trb.foot_traffic` | Venue occupancy and traffic | 10-30 seconds |
+    | `ext.trillboards_contract` | Signal quality assurance | Per-request |
+    | `user.data[]` | IAB Audience Taxonomy 1.1 segments + seller-defined | 10-30 seconds |
+
+    ## Signal Sources
+
+    - **FEIN Edge AI**: On-device ML Kit (face detection, gaze tracking) + YAMNet TFLite (audio classification). Runs on the CTV tablet, never sends raw audio/video off-device.
+    - **VAS Engine**: Verified Attention Seconds computed from historical FEIN measurements, stored in PostgreSQL attention_ledger.
+    - **Intent Graph**: Speech-derived purchase intent from YAMNet audio scene classification + keyword detection. On-device only.
+    - **Weather Service**: OpenWeatherMap data cached in Redis with 60-minute TTL.
+    - **Census ACS**: US Census American Community Survey neighborhood demographics by geohash.
+
+    ## Privacy
+
+    - All audience signals are aggregated/anonymized — no PII in bid requests
+    - Face detection counts faces, does NOT identify individuals
+    - Emotion analysis uses facial expression classification, NOT facial recognition
+    - Audio classification identifies sound TYPES (speech, music, noise), does NOT record or transmit audio
+    - All processing happens on-device (edge AI) — raw sensor data never leaves the device
+externalDocs:
+  description: Executable OpenRTB, VAST, FEIN, OMSDK, and telemetry routes
+  url: https://api.trillboards.com/docs/openapi/programmatic-api.yaml
+
+  contact:
+    name: Trillboards Developer Support
+    email: developers@trillboards.com
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.trillboards.com
+    description: Production
+
+paths:
+  /openrtb/v2/bid:
+    post:
+      operationId: doohBidRequest
+      summary: OpenRTB 2.6 DOOH bid request (outbound to DSPs)
+      description: |
+        This documents the bid request Trillboards SENDS to DSPs.
+        It is included here for schema reference — the actual bid endpoint
+        is on the DSP side, not on Trillboards.
+
+        The request body shows the full structure with all extension namespaces.
+        For executable Trillboards endpoints, use the Programmatic & FEIN API spec.
+      tags: [Bid Request Schema]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DOOHBidRequest'
+      responses:
+        '200':
+          description: DSP bid response (standard OpenRTB)
+
+x-related-specs:
+  - name: Programmatic & FEIN API
+    url: https://api.trillboards.com/docs/openapi/programmatic-api.yaml
+    description: Live executable endpoints for bidding, VAST, FEIN, OMSDK, and telemetry
+
+tags:
+  - name: Bid Request Schema
+    description: OpenRTB 2.6 DOOH bid request with Trillboards extensions
+
+components:
+  schemas:
+    DOOHBidRequest:
+      type: object
+      description: Full OpenRTB 2.6 DOOH bid request with all Trillboards extensions
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique bid request ID
+        imp:
+          type: array
+          items:
+            $ref: '#/components/schemas/Impression'
+        dooh:
+          $ref: '#/components/schemas/DOOHObject'
+        device:
+          $ref: '#/components/schemas/Device'
+        user:
+          $ref: '#/components/schemas/User'
+        source:
+          $ref: '#/components/schemas/Source'
+        regs:
+          $ref: '#/components/schemas/Regs'
+        at:
+          type: integer
+          enum: [1]
+          description: "Auction type. Always 1 (first price)"
+        tmax:
+          type: integer
+          default: 500
+          description: Maximum response time in milliseconds
+        cur:
+          type: array
+          items:
+            type: string
+          default: ["USD"]
+        ext:
+          $ref: '#/components/schemas/BidRequestExt'
+
+    BidRequestExt:
+      type: object
+      description: Top-level bid request extensions
+      properties:
+        protocol:
+          type: string
+          example: "OpenRTB 2.6"
+        trillboards:
+          $ref: '#/components/schemas/TrillboardsAudienceExt'
+        trb:
+          $ref: '#/components/schemas/TrbNamespace'
+        trillboards_contract:
+          $ref: '#/components/schemas/ContractExt'
+
+    TrillboardsAudienceExt:
+      type: object
+      description: |
+        Real-time audience intelligence from FEIN edge AI sensors.
+        Updated every 10-30 seconds. These signals are MEASURED, not estimated.
+        Unlike CTV viewability which uses probabilistic models, Trillboards uses
+        on-device computer vision (ML Kit) and audio classification (YAMNet TFLite)
+        to provide deterministic audience data.
+      properties:
+        attention_score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: |
+            Fraction of detected faces actively looking at the screen.
+            0.0 = nobody looking, 1.0 = everyone looking.
+            Measured via gaze detection, NOT self-reported or probabilistic.
+          example: 0.72
+        audience_count:
+          type: number
+          description: Average number of faces detected during current measurement window
+          example: 4.2
+        crowd_density:
+          type: integer
+          description: Peak face count observed in current window (max concurrent viewers)
+          example: 8
+        ad_receptivity:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: |
+            Audio-derived venue receptivity score. Quiet/focused environments
+            score higher. Based on YAMNet ambient sound classification
+            (NOT microphone recording — classifies sound types only).
+          example: 0.85
+        emotional_engagement:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: |
+            Composite emotional engagement score from facial expression analysis.
+            Higher = more engaged (positive or negative reaction to content).
+            Does NOT identify individuals — uses edge-only expression classification.
+          example: 0.58
+        mood:
+          type: string
+          description: Dominant venue mood from audio/visual analysis
+          enum: [energetic, calm, focused, social, neutral]
+          example: "social"
+        estimated_occupancy:
+          type: integer
+          description: Estimated venue occupancy (extrapolated from visible faces + venue capacity)
+          example: 25
+        avg_dwell_ms:
+          type: number
+          description: Average time (milliseconds) a face stays in the camera's field of view
+          example: 8400
+        group_composition:
+          type: object
+          description: |
+            Audience composition breakdown by demographic bucket.
+            Derived from facial feature analysis (age range, gender estimation).
+            NOT facial recognition — no identity resolution.
+          properties:
+            adults:
+              type: integer
+            children:
+              type: integer
+            seniors:
+              type: integer
+        screen_engagement:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Combined engagement metric (attention + emotion + dwell)
+          example: 0.65
+        audience_reaction:
+          type: string
+          description: Dominant audience reaction to current content
+          enum: [positive, neutral, negative, mixed]
+          example: "positive"
+        signals_age_ms:
+          type: integer
+          description: |
+            Milliseconds since last FEIN measurement update.
+            Lower = fresher signals. Typical: 10,000-30,000ms.
+            If > 120,000ms, signals may be stale (screen offline or camera occluded).
+          example: 15000
+        reliability_score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: |
+            Screen reliability score from unified telemetry.
+            Factors: uptime, heartbeat regularity, GPS accuracy, FEIN measurement frequency.
+          example: 0.94
+        audience_quality:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: |
+            Audience data quality score. High = rich FEIN signals with high confidence.
+            Low = limited or stale audience data.
+          example: 0.87
+        screen_quality_composite:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Composite quality score combining reliability + audience quality + geo accuracy
+          example: 0.91
+
+    TrbNamespace:
+      type: object
+      description: Trillboards extension sub-namespaces
+      properties:
+        vas:
+          $ref: '#/components/schemas/VASExt'
+        intent:
+          $ref: '#/components/schemas/IntentExt'
+        weather:
+          $ref: '#/components/schemas/WeatherExt'
+        foot_traffic:
+          $ref: '#/components/schemas/FootTrafficExt'
+
+    VASExt:
+      type: object
+      description: |
+        Verified Attention Seconds — historical attention quality metrics
+        for this screen. Based on 7-day rolling data from the attention_ledger.
+
+        VAS = face_count * attention_score * dwell_seconds. It captures the TOTAL
+        attention delivered, not just whether someone was present. A screen with
+        3 attentive viewers for 10 seconds scores higher than 10 distracted
+        viewers for 1 second.
+      properties:
+        pricing_model:
+          type: string
+          enum: [vas]
+          description: Always "vas" — indicates attention-based pricing is available
+        predicted_vas:
+          type: number
+          description: Predicted VAS for the next impression based on historical patterns
+          example: 1.85
+        historical_vas_avg:
+          type: number
+          description: Average VAS over the past 7 days
+          example: 1.85
+        median_vas:
+          type: number
+          description: Median VAS (more robust to outliers than mean)
+          example: 1.62
+        p90_vas:
+          type: number
+          description: 90th percentile VAS — the quality floor for top 10% of measurements
+          example: 3.45
+        vas_floor:
+          type: number
+          description: Minimum VAS threshold for quality-gated pricing
+          example: 0.05
+        vas_measurements_7d:
+          type: integer
+          description: Number of VAS measurements in the past 7 days (data density)
+          example: 2450
+        avg_face_count:
+          type: number
+          description: Average face count across measurements
+          example: 3.2
+        avg_attention_score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Average attention score across measurements
+          example: 0.71
+        last_measurement:
+          type: string
+          format: date-time
+          description: Timestamp of most recent VAS measurement
+
+    IntentExt:
+      type: object
+      description: |
+        Purchase intent signals derived from ambient audio classification.
+        YAMNet TFLite classifies audio SCENES (not speech content) on-device.
+        Combined with visual shopping signals (bag detection) and demographic
+        context to compute a composite intent score.
+
+        Higher intent_score = audience is more likely to make a purchase.
+        DSPs can bid higher when purchase_stage is READY_TO_BUY or COMPARING.
+      properties:
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: |
+            Composite purchase intent score (0-1).
+            Weighted combination of verbal intent, brand mentions, price inquiry,
+            shopping activity, bag detection, income match, emotion, and engagement.
+          example: 0.72
+        purchase_stage:
+          type: string
+          enum: [READY_TO_BUY, COMPARING, CONSIDERING, BROWSING, NONE]
+          description: |
+            Classified purchase funnel stage based on behavioral signals.
+            - READY_TO_BUY: High intent + brand mentions + price inquiry (score >= 0.7)
+            - COMPARING: Active comparison shopping (score 0.5-0.7)
+            - CONSIDERING: Interest shown but no purchase signals (score 0.3-0.5)
+            - BROWSING: Casual browsing, low intent (score 0.1-0.3)
+            - NONE: No purchase intent detected (score < 0.1)
+          example: "COMPARING"
+        categories:
+          type: array
+          description: Detected product/service interest categories
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+                description: Product/service category name
+              source:
+                type: string
+                description: Signal source (speech, visual, contextual)
+              confidence:
+                type: number
+          example:
+            - category: "athletic_apparel"
+              source: "speech"
+              confidence: 0.82
+            - category: "sports_nutrition"
+              source: "contextual"
+              confidence: 0.65
+        brand_mentions:
+          type: boolean
+          description: Whether brand names were detected in ambient audio
+          example: true
+        brand_count:
+          type: integer
+          description: Number of distinct brand mentions detected
+          example: 2
+        audience_size:
+          type: integer
+          description: Current audience size (face count) when intent was measured
+          example: 4
+        should_trigger:
+          type: boolean
+          description: Whether intent score is high enough to trigger premium ad swap
+          example: true
+
+    WeatherExt:
+      type: object
+      description: |
+        Contextual weather data for the screen's location.
+        Cached in Redis with 60-minute TTL from OpenWeatherMap.
+        DSPs use weather for contextual targeting (e.g., ice cream ads when hot,
+        umbrella ads when raining).
+      properties:
+        temp_f:
+          type: number
+          description: Current temperature in Fahrenheit
+          example: 78.5
+        feels_like_f:
+          type: number
+          description: Feels-like temperature accounting for humidity and wind chill
+          example: 82.1
+        humidity:
+          type: number
+          description: Relative humidity percentage (0-100)
+          example: 65
+        condition:
+          type: string
+          description: Weather condition description
+          example: "partly_cloudy"
+        uv_index:
+          type: number
+          description: UV index (0-11+)
+          example: 6
+        wind_mph:
+          type: number
+          description: Wind speed in miles per hour
+          example: 8.5
+        is_raining:
+          type: boolean
+          description: Whether it is currently raining at the screen location
+          example: false
+        temp_segment:
+          type: string
+          enum: [hot, warm, cool, cold]
+          description: |
+            Temperature classification for easy targeting:
+            - hot: >= 85F
+            - warm: 65-84F
+            - cool: 45-64F
+            - cold: < 45F
+          example: "warm"
+
+    FootTrafficExt:
+      type: object
+      description: |
+        Real-time venue foot traffic metrics derived from FEIN audience sensing.
+        Higher traffic = more impressions = higher value for advertisers.
+      properties:
+        current_audience:
+          type: integer
+          description: Current number of people detected (face count, rounded)
+          example: 6
+        estimated_occupancy:
+          type: integer
+          description: Estimated total venue occupancy (extrapolated)
+          example: 25
+        avg_dwell_seconds:
+          type: integer
+          description: Average dwell time in seconds
+          example: 8
+        traffic_tier:
+          type: string
+          enum: [very_low, low, medium, high, very_high]
+          description: |
+            Traffic classification for easy targeting:
+            - very_high: >= 50 people
+            - high: 20-49 people
+            - medium: 8-19 people
+            - low: 3-7 people
+            - very_low: < 3 people
+          example: "medium"
+        estimated_hourly_impressions:
+          type: integer
+          description: Projected impressions per hour based on face turnover rate
+          example: 180
+
+    ContractExt:
+      type: object
+      description: |
+        Signal quality assurance contract. Tells DSPs how complete and
+        reliable the signals in this bid request are. If valid=false,
+        some required fields are missing (but the request is still valid OpenRTB).
+      properties:
+        version:
+          type: string
+          description: Contract schema version
+          example: "2026-03-v1"
+        valid:
+          type: boolean
+          description: Whether all required fields passed validation
+          example: true
+        required_field_coverage_pct:
+          type: number
+          description: Percentage of required fields that are present and valid
+          example: 95.5
+        error_count:
+          type: integer
+          description: Number of validation errors (missing required fields)
+          example: 0
+        warning_count:
+          type: integer
+          description: Number of validation warnings (recommended fields missing)
+          example: 2
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+        warnings:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+    User:
+      type: object
+      description: |
+        User object containing audience taxonomy segments.
+        DOOH does not have individual user identification — segments
+        represent the aggregate audience at the screen location.
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserData'
+
+    UserData:
+      type: object
+      description: |
+        IAB Audience Taxonomy 1.1 segments and seller-defined context segments.
+        Three data sources may be present in user.data[]:
+
+        1. **trillboards-audience**: Real-time audience segments from FEIN edge AI
+        2. **trillboards-census**: US Census ACS neighborhood demographics
+        3. **trillboards-seller-defined**: Seller-defined context segments (venue, traffic, dwell, daypart)
+      properties:
+        id:
+          type: string
+          description: Data provider identifier
+          enum: [trillboards-audience, trillboards-census, trillboards-seller-defined]
+        name:
+          type: string
+          description: Human-readable data source name
+        segment:
+          type: array
+          items:
+            $ref: '#/components/schemas/Segment'
+        ext:
+          type: object
+          properties:
+            segtax:
+              type: integer
+              description: "Segment taxonomy. 4 = IAB Audience Taxonomy 1.1"
+              example: 4
+            source:
+              type: string
+              description: Signal source method
+              enum: [deterministic, census_acs_2023, seller_defined]
+            method:
+              type: string
+              description: Measurement method used
+              enum: [edge_ai_vision, neighborhood_demographics, contextual]
+
+    Segment:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Segment identifier (IAB taxonomy ID or seller-defined)
+        name:
+          type: string
+          description: Human-readable segment name
+        value:
+          type: string
+
+    IABSegmentReference:
+      type: object
+      description: |
+        Reference table of IAB Audience Taxonomy 1.1 segment IDs used by Trillboards.
+
+        ### Income Segments
+        | ID | Name |
+        |-----|------|
+        | 1001 | High Income |
+        | 1002 | Upper-Middle Income |
+        | 1003 | Middle Income |
+        | 1004 | Lower-Middle Income |
+        | 1005 | Low Income |
+
+        ### Lifestyle Segments
+        | ID | Name |
+        |-----|------|
+        | 2001 | Business Professional |
+        | 2002 | Student |
+        | 2003 | Fitness Enthusiast |
+        | 2004 | Luxury Shopper |
+        | 2005 | Tech Savvy |
+        | 2006 | Outdoor Active |
+        | 2007 | Foodie |
+        | 2008 | Health Conscious |
+        | 2009 | Parent |
+        | 2010 | Commuter |
+        | 2011 | Tourist |
+        | 2012 | Nightlife |
+        | 2013 | Pet Owner |
+        | 2014 | Gamer |
+        | 2015 | Reader |
+        | 2016 | Eco-Conscious |
+        | 2017 | Fashion Forward |
+        | 2018 | DIY/Home Improvement |
+        | 2019 | Music Lover |
+        | 2020 | Sports Fan |
+
+        ### Purchase Intent Segments
+        | ID | Name |
+        |-----|------|
+        | 3001 | High Purchase Intent |
+        | 3002 | Medium Purchase Intent |
+        | 3003 | Low Purchase Intent |
+
+    SellerDefinedSegmentReference:
+      type: object
+      description: |
+        Seller-defined context segments in the `trillboards-seller-defined` data object.
+        These are included in `user.data[]` with `ext.segtax` omitted (seller-defined taxonomy).
+
+        ### Venue Segments (trb_vn_*)
+        | ID | Name | Matches |
+        |-----|------|---------|
+        | trb_vn_001 | venue:fitness_gym | gym, fitness, workout, crossfit |
+        | trb_vn_002 | venue:restaurant_casual | casual restaurant, diner |
+        | trb_vn_003 | venue:restaurant_quick_service | QSR, fast food, takeout |
+        | trb_vn_004 | venue:bar_nightlife | bar, nightlife, club, pub, lounge |
+        | trb_vn_005 | venue:salon_beauty | salon, beauty, spa |
+        | trb_vn_006 | venue:barber_shop | barber |
+        | trb_vn_007 | venue:retail_general | retail, shopping, mall |
+        | trb_vn_008 | venue:retail_convenience | convenience, gas station |
+        | trb_vn_009 | venue:office_lobby | office, cowork, business |
+        | trb_vn_010 | venue:healthcare_waiting_room | clinic, medical, hospital, pharmacy |
+        | trb_vn_011 | venue:education_campus | campus, college, university, school |
+        | trb_vn_012 | venue:hotel_hospitality | hotel, hospitality, resort |
+        | trb_vn_013 | venue:transit_hub | transit, station, airport, terminal |
+        | trb_vn_014 | venue:entertainment | cinema, theater, arcade, event |
+        | trb_vn_015 | venue:residential_common | residential, apartment, condo, lobby |
+
+        ### Geo Segments (trb_geo_*)
+        | ID | Name |
+        |-----|------|
+        | trb_geo_001 | geo:country_us |
+        | trb_geo_002 | geo:state_ca |
+        | trb_geo_003 | geo:state_ny |
+        | trb_geo_004 | geo:state_tx |
+        | trb_geo_005 | geo:city_tier_1 |
+
+        ### Traffic Tier Segments (trb_trf_*)
+        | ID | Name | Threshold |
+        |-----|------|-----------|
+        | trb_trf_001 | traffic:very_low | < 3 people |
+        | trb_trf_002 | traffic:low | 3-7 people |
+        | trb_trf_003 | traffic:medium | 8-19 people |
+        | trb_trf_004 | traffic:high | 20-49 people |
+        | trb_trf_005 | traffic:very_high | >= 50 people |
+
+        ### Dwell Time Segments (trb_dwl_*)
+        | ID | Name | Threshold |
+        |-----|------|-----------|
+        | trb_dwl_001 | dwell:very_short | < 3 seconds |
+        | trb_dwl_002 | dwell:short | 3-7 seconds |
+        | trb_dwl_003 | dwell:medium | 7-15 seconds |
+        | trb_dwl_004 | dwell:long | > 15 seconds |
+
+        ### Daypart Segments (trb_dpt_*)
+        | ID | Name | Hours (UTC) |
+        |-----|------|-------------|
+        | trb_dpt_001 | daypart:morning | 05:00-10:59 |
+        | trb_dpt_002 | daypart:midday | 11:00-13:59 |
+        | trb_dpt_003 | daypart:afternoon | 14:00-17:59 |
+        | trb_dpt_004 | daypart:evening | 18:00-22:59 |
+        | trb_dpt_005 | daypart:late_night | 23:00-04:59 |
+
+        ### Quality Flags (trb_qly_*)
+        | ID | Name | Meaning |
+        |-----|------|---------|
+        | trb_qly_001 | quality:geo_verified | Screen has GPS coordinates |
+        | trb_qly_002 | quality:edge_sensed_audience | Real-time FEIN audience data present |
+        | trb_qly_003 | quality:floor_defined | Publisher floor price is set |
+
+    Impression:
+      type: object
+      properties:
+        id:
+          type: string
+        tagid:
+          type: string
+          description: Screen MongoDB ID
+        bidfloor:
+          type: number
+          description: Floor price in CPM
+        bidfloorcur:
+          type: string
+          default: "USD"
+        secure:
+          type: integer
+          default: 1
+        dt:
+          type: integer
+          description: Estimated fulfillment timestamp (epoch seconds)
+        qty:
+          type: object
+          description: DOOH impression quantity/multiplier (OpenRTB 2.6)
+          properties:
+            multiplier:
+              type: number
+              description: Impression multiplier for DOOH audience sizing
+            sourcetype:
+              type: integer
+              enum: [2]
+              description: "2 = publisher-provided"
+            vendor:
+              type: string
+              example: "trillboards"
+        banner:
+          type: object
+          properties:
+            w:
+              type: integer
+            h:
+              type: integer
+            format:
+              type: array
+              items:
+                type: object
+                properties:
+                  w:
+                    type: integer
+                  h:
+                    type: integer
+            pos:
+              type: integer
+              description: "1 = above the fold (always for DOOH)"
+        video:
+          type: object
+          properties:
+            mimes:
+              type: array
+              items:
+                type: string
+            minduration:
+              type: integer
+            maxduration:
+              type: integer
+            protocols:
+              type: array
+              items:
+                type: integer
+            w:
+              type: integer
+            h:
+              type: integer
+            startdelay:
+              type: integer
+            placement:
+              type: integer
+            linearity:
+              type: integer
+            skip:
+              type: integer
+
+    DOOHObject:
+      type: object
+      description: OpenRTB 2.6 DOOH object (top-level, replaces site/app)
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        venuetype:
+          type: array
+          items:
+            type: string
+          description: OpenOOH Venue Taxonomy v1.2 IDs
+        venuetypetax:
+          type: integer
+          enum: [1]
+          description: "1 = OpenOOH Venue Taxonomy"
+        publisher:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            domain:
+              type: string
+            cat:
+              type: array
+              items:
+                type: string
+        domain:
+          type: string
+        keywords:
+          type: string
+
+    Device:
+      type: object
+      properties:
+        devicetype:
+          type: integer
+          enum: [8]
+          description: "8 = Digital Out of Home (DOOH) per OpenRTB 2.6"
+        ua:
+          type: string
+        make:
+          type: string
+        model:
+          type: string
+        os:
+          type: string
+        osv:
+          type: string
+        connectiontype:
+          type: integer
+        w:
+          type: integer
+        h:
+          type: integer
+        ifa:
+          type: string
+          description: Publisher-provided device ID (screen ID) for frequency capping
+        ifa_type:
+          type: string
+          enum: [ppid]
+          description: Publisher-provided ID type
+        geo:
+          type: object
+          properties:
+            lat:
+              type: number
+            lon:
+              type: number
+            type:
+              type: integer
+              description: "1 = GPS"
+            country:
+              type: string
+            region:
+              type: string
+            city:
+              type: string
+            zip:
+              type: string
+        eids:
+          type: array
+          description: Extended device identifiers (IAB recommended for DOOH)
+          items:
+            type: object
+            properties:
+              source:
+                type: string
+              uids:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    atype:
+                      type: integer
+                      description: "501 = publisher-assigned device ID"
+
+    Source:
+      type: object
+      properties:
+        fd:
+          type: integer
+          description: "1 = exchange is final decision maker"
+        tid:
+          type: string
+          description: Transaction/request ID
+        schain:
+          type: object
+          description: Supply chain transparency
+          properties:
+            complete:
+              type: integer
+              description: "1 = all nodes represented"
+            nodes:
+              type: array
+              items:
+                type: object
+                properties:
+                  asi:
+                    type: string
+                  sid:
+                    type: string
+                  rid:
+                    type: string
+                  name:
+                    type: string
+                  domain:
+                    type: string
+                  hp:
+                    type: integer
+            ver:
+              type: string
+
+    Regs:
+      type: object
+      properties:
+        coppa:
+          type: integer
+          default: 0
+        gdpr:
+          type: integer
+          default: 0
+          description: DOOH is generally not subject to GDPR (no personal data)

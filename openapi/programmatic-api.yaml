@@ -1,0 +1,1781 @@
+openapi: 3.0.3
+info:
+  title: Trillboards Programmatic & FEIN API
+  version: 2026-03-09
+  description: |
+    Executable OpenRTB, VAST, OMSDK, audience-intelligence, and FEIN APIs exposed by
+    the Trillboards programmatic stack.
+
+    Use this spec when you want to integrate against Trillboards' live OpenRTB-facing
+    endpoints. For the proprietary outbound bid-request signal schema, pair this spec
+    with `https://api.trillboards.com/docs/openapi/openrtb-extensions.yaml`.
+
+    ## Surface Areas
+
+    - OpenRTB v1 bidding, delivery telemetry, impression/event tracking
+    - VAST request telemetry and creative safety controls
+    - OMSDK verification workflows
+    - Audience-intelligence and semantic-search APIs
+    - FEIN analytics, webhooks, and SSE streaming
+
+    ## Authentication
+
+    - Core delivery telemetry routes are public or network-to-network
+    - Admin/reporting routes use bearer authentication
+    - FEIN routes use `X-API-Key`
+
+  contact:
+    name: Trillboards Developer Support
+    email: developers@trillboards.com
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.trillboards.com
+    description: Production
+  - url: http://localhost:4004
+    description: Local development
+
+tags:
+  - name: Programmatic Bidding
+    description: Core OpenRTB bidding and win-notification flows
+  - name: Impression Tracking
+    description: Impression, proof-of-play, and viewability collection
+  - name: Event Tracking
+    description: Completion, heartbeat, performance, and event analytics
+  - name: Interaction Tracking
+    description: Interaction and QR scan analytics
+  - name: VAST Telemetry
+    description: VAST request outcome telemetry, creative blocklists, and cache analytics
+  - name: Bandwidth Telemetry
+    description: Video cache and bandwidth savings telemetry
+  - name: Creative Review
+    description: Manual review and creative history endpoints
+  - name: Creative Intelligence
+    description: Experimentation and creative performance analytics
+  - name: OMSDK
+    description: OMSDK verification session and reporting routes
+  - name: Audience Intelligence
+    description: Lookalikes, prediction, semantic search, and creative ranking
+  - name: FEIN Analytics
+    description: FEIN edge AI analytics and readiness reporting
+  - name: FEIN Webhooks
+    description: FEIN webhook registration and SSE streaming
+
+x-related-specs:
+  - name: OpenRTB 2.6 Extensions
+    url: https://api.trillboards.com/docs/openapi/openrtb-extensions.yaml
+    description: Proprietary outbound bid-request signal schema
+
+paths:
+  /openrtb/v1/bid:
+    post:
+      operationId: processBidRequest
+      summary: Process OpenRTB bid request
+      description: |
+        Accepts an OpenRTB 2.6 bid request and returns matching bid responses.
+        Supports DOOH (via `dooh` object) and web (via `site`/`app` objects).
+        Maximum 10 impressions per request. Returns 204 No Content when no matching ads are available.
+      tags: [Programmatic Bidding]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BidRequest'
+      responses:
+        '200':
+          description: Bid response with matching ads
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BidResponse'
+        '204':
+          description: No bid -- no matching ads available
+        '400':
+          description: Invalid bid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Invalid bid request: missing id or imp'
+
+  /openrtb/v1/win:
+    get:
+      operationId: handleWinNotification
+      summary: Handle win notification
+      tags: [Programmatic Bidding]
+      responses:
+        '200': { description: Win recorded }
+
+  /openrtb/v1/vast:
+    get:
+      operationId: generateVast
+      summary: Generate VAST 4.2 response
+      description: |
+        Generates a VAST 4.2 XML document for a specific ad. Includes OMSDK
+        AdVerifications, viewability tracking, and quartile event tracking URLs.
+        The VAST document contains inline `MediaFile`, `TrackingEvents`, and
+        `ViewableImpression` elements conforming to IAB VAST 4.2.
+      tags: [Programmatic Bidding]
+      parameters:
+        - $ref: '#/components/parameters/ScreenIdQuery'
+        - name: adid
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Advertisement ID
+        - name: impid
+          in: query
+          schema:
+            type: string
+          description: Impression ID for tracking correlation
+        - name: w
+          in: query
+          schema:
+            type: integer
+            default: 1920
+          description: Video width in pixels
+        - name: h
+          in: query
+          schema:
+            type: integer
+            default: 1080
+          description: Video height in pixels
+      responses:
+        '200':
+          description: VAST 4.2 XML document
+          content:
+            application/xml:
+              schema:
+                type: string
+                description: VAST 4.2 XML with InLine ad, MediaFiles, TrackingEvents, and OMSDK AdVerifications
+        '404':
+          description: Video ad not found
+
+  /openrtb/v1/pixel:
+    get:
+      operationId: trackImpressionPixel
+      summary: Track impression via pixel
+      tags: [Impression Tracking]
+      responses:
+        '200':
+          description: Transparent tracking pixel
+          content:
+            image/gif:
+              schema:
+                type: string
+                format: binary
+
+  /openrtb/v1/impression:
+    post:
+      operationId: recordImpression
+      summary: Record impression
+      tags: [Impression Tracking]
+      responses:
+        '200': { description: Impression recorded }
+
+  /openrtb/v1/proof-of-play:
+    post:
+      operationId: recordProofOfPlay
+      summary: Record MRC DOOH proof-of-play
+      tags: [Impression Tracking]
+      responses:
+        '200': { description: Proof-of-play recorded }
+
+  /openrtb/v1/viewability:
+    post:
+      operationId: trackViewability
+      summary: Record viewability telemetry
+      tags: [Impression Tracking]
+      responses:
+        '200': { description: Viewability telemetry recorded }
+
+  /openrtb/v1/analytics/impressions:
+    get:
+      operationId: getImpressionAnalytics
+      summary: Get impression analytics
+      tags: [Impression Tracking]
+      security:
+        - bearerAuth: []
+      responses:
+        '200': { description: Impression analytics returned }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/impressions/batch:
+    post:
+      operationId: batchUpdateImpressions
+      summary: Batch update impressions
+      tags: [Impression Tracking]
+      security:
+        - bearerAuth: []
+      responses:
+        '200': { description: Impression batch processed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/event:
+    get:
+      operationId: trackEventGet
+      summary: Track event via GET (pixel)
+      description: |
+        Track an ad event via GET request. Returns a 1x1 transparent GIF pixel.
+        Used by VAST tracking URLs embedded in creatives. Includes GIVT (General
+        Invalid Traffic) filtration with deduplication, screen liveness, and demo detection.
+      tags: [Event Tracking]
+      parameters:
+        - name: adid
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Advertisement ID
+        - name: event
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [start, firstQuartile, midpoint, thirdQuartile, complete, impression, viewable, notviewable, viewundetermined, error, click, skip, mute, unmute, pause, resume, fullscreen, exitFullscreen, close]
+          description: Event type
+        - name: impid
+          in: query
+          schema:
+            type: string
+          description: Impression ID for correlation
+        - name: screenId
+          in: query
+          schema:
+            type: string
+          description: Screen ID
+        - name: deviceId
+          in: query
+          schema:
+            type: string
+          description: Device ID (partner SDK sends P_* IDs)
+        - name: errorCode
+          in: query
+          schema:
+            type: integer
+          description: IMA error code (when event=error)
+        - name: vastErrorCode
+          in: query
+          schema:
+            type: integer
+          description: VAST error code (when event=error)
+      responses:
+        '200':
+          description: 1x1 transparent GIF tracking pixel
+          content:
+            image/gif:
+              schema:
+                type: string
+                format: binary
+    post:
+      operationId: trackEventPost
+      summary: Track event via POST (JSON)
+      description: |
+        Track an ad event via POST request. Returns a JSON acknowledgment.
+        Includes GIVT filtration. Deduplicated events return success with givt flags.
+      tags: [Event Tracking]
+      parameters:
+        - name: adid
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Advertisement ID
+        - name: event
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Event type (start, complete, impression, error, etc.)
+        - name: impid
+          in: query
+          schema:
+            type: string
+          description: Impression ID
+        - name: screenId
+          in: query
+          schema:
+            type: string
+          description: Screen ID
+        - name: deviceId
+          in: query
+          schema:
+            type: string
+          description: Device ID
+      responses:
+        '200':
+          description: Event tracked successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Event complete tracked successfully
+                  givt:
+                    type: object
+                    description: Present when GIVT flags were detected (deduplicated events, stale screens, demo ads)
+                    properties:
+                      flags:
+                        type: array
+                        items:
+                          type: string
+                          enum: [duplicate, screen_offline, demo_ad]
+        '400':
+          description: Missing required parameters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: Missing required parameters
+
+  /openrtb/v1/heartbeat:
+    post:
+      operationId: trackHeartbeat
+      summary: Track screen heartbeat
+      tags: [Event Tracking]
+      responses:
+        '200': { description: Heartbeat recorded }
+
+  /openrtb/v1/complete:
+    post:
+      operationId: trackCompletion
+      summary: Track completion event
+      tags: [Event Tracking]
+      responses:
+        '200': { description: Completion event recorded }
+
+  /openrtb/v1/performance:
+    post:
+      operationId: trackPerformance
+      summary: Track performance telemetry
+      tags: [Event Tracking]
+      responses:
+        '200': { description: Performance telemetry recorded }
+
+  /openrtb/v1/analytics/events:
+    get:
+      operationId: getEventAnalytics
+      summary: Get event analytics
+      tags: [Event Tracking]
+      security:
+        - bearerAuth: []
+      responses:
+        '200': { description: Event analytics returned }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/events/cleanup:
+    delete:
+      operationId: cleanupOldEvents
+      summary: Delete old events
+      tags: [Event Tracking]
+      security:
+        - bearerAuth: []
+      responses:
+        '200': { description: Old events cleaned up }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/interaction:
+    post:
+      operationId: trackInteraction
+      summary: Track ad interaction
+      tags: [Interaction Tracking]
+      responses:
+        '200': { description: Interaction recorded }
+
+  /openrtb/v1/interaction-summary:
+    post:
+      operationId: trackInteractionSummary
+      summary: Submit interaction summary
+      tags: [Interaction Tracking]
+      responses:
+        '200': { description: Interaction summary recorded }
+
+  /openrtb/v1/analytics/interactions:
+    get:
+      operationId: getInteractionAnalytics
+      summary: Get interaction analytics
+      tags: [Interaction Tracking]
+      security:
+        - bearerAuth: []
+      responses:
+        '200': { description: Interaction analytics returned }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/analytics/qr-scans:
+    get:
+      operationId: getQrScanAnalytics
+      summary: Get QR scan analytics
+      tags: [Interaction Tracking]
+      security:
+        - bearerAuth: []
+      responses:
+        '200': { description: QR scan analytics returned }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/vast-request:
+    post:
+      operationId: recordVastRequest
+      summary: Track VAST request outcome
+      description: Track pending, filled, no-fill, error, timeout, and completion states.
+      tags: [VAST Telemetry]
+      responses:
+        '200': { description: VAST request telemetry recorded }
+
+  /openrtb/v1/vast-request/analytics:
+    get:
+      operationId: getVastRequestAnalytics
+      summary: Get VAST request analytics
+      tags: [VAST Telemetry]
+      responses:
+        '200': { description: VAST request analytics returned }
+
+  /openrtb/v1/creative-blocklist:
+    get:
+      operationId: getCreativeBlocklist
+      summary: Get creative blocklist
+      tags: [VAST Telemetry]
+      responses:
+        '200': { description: Creative blocklist returned }
+
+  /openrtb/v1/vast-cache-metric:
+    post:
+      operationId: recordVastCacheMetric
+      summary: Track VAST cache metric
+      tags: [Bandwidth Telemetry]
+      responses:
+        '200': { description: Cache metric recorded }
+
+  /openrtb/v1/vast-cache/analytics:
+    get:
+      operationId: getVastCacheAnalytics
+      summary: Get VAST cache analytics
+      tags: [Bandwidth Telemetry]
+      responses:
+        '200': { description: Cache analytics returned }
+
+  /openrtb/v1/vast-cache/daily:
+    get:
+      operationId: getVastCacheDaily
+      summary: Get daily VAST cache performance trends
+      tags: [Bandwidth Telemetry]
+      responses:
+        '200': { description: Daily cache trend returned }
+
+  /openrtb/v1/bandwidth-metric:
+    post:
+      operationId: recordBandwidthMetric
+      summary: Track bandwidth telemetry
+      tags: [Bandwidth Telemetry]
+      responses:
+        '200': { description: Bandwidth metric recorded }
+
+  /openrtb/v1/bandwidth/analytics:
+    get:
+      operationId: getBandwidthAnalytics
+      summary: Get aggregated bandwidth analytics
+      tags: [Bandwidth Telemetry]
+      responses:
+        '200': { description: Bandwidth analytics returned }
+
+  /openrtb/v1/bandwidth/screen-usage:
+    get:
+      operationId: getScreenBandwidthUsage
+      summary: Get per-screen bandwidth usage
+      tags: [Bandwidth Telemetry]
+      responses:
+        '200': { description: Screen bandwidth usage returned }
+
+  /openrtb/v1/creative-review:
+    get:
+      operationId: listCreativeReviews
+      summary: List creative reviews
+      tags: [Creative Review]
+      responses:
+        '200': { description: Creative reviews returned }
+
+  /openrtb/v1/creative-review/stats:
+    get:
+      operationId: getCreativeReviewStats
+      summary: Get creative review statistics
+      tags: [Creative Review]
+      responses:
+        '200': { description: Creative review stats returned }
+
+  /openrtb/v1/creative-review/{creativeId}/block:
+    post:
+      operationId: blockCreative
+      summary: Block creative
+      tags: [Creative Review]
+      parameters:
+        - $ref: '#/components/parameters/CreativeIdPath'
+      responses:
+        '200': { description: Creative blocked }
+
+  /openrtb/v1/creative-review/{creativeId}/unblock:
+    post:
+      operationId: unblockCreative
+      summary: Unblock creative
+      tags: [Creative Review]
+      parameters:
+        - $ref: '#/components/parameters/CreativeIdPath'
+      responses:
+        '200': { description: Creative unblocked }
+
+  /openrtb/v1/creative-review/{creativeId}/confirm:
+    post:
+      operationId: confirmCreativeReview
+      summary: Confirm or override AI classification
+      tags: [Creative Review]
+      parameters:
+        - $ref: '#/components/parameters/CreativeIdPath'
+      responses:
+        '200': { description: Review confirmation recorded }
+
+  /openrtb/v1/creative-history/{screenId}:
+    get:
+      operationId: getCreativeHistory
+      summary: Get creative history for a screen
+      tags: [Creative Review]
+      parameters:
+        - $ref: '#/components/parameters/ScreenIdPath'
+      responses:
+        '200': { description: Creative history returned }
+
+  /openrtb/v1/creative-intelligence/performance/{creativeId}:
+    get:
+      operationId: getCreativePerformance
+      summary: Get creative performance metrics
+      tags: [Creative Intelligence]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CreativeIdPath'
+      responses:
+        '200': { description: Creative performance returned }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/creative-intelligence/top:
+    get:
+      operationId: getTopCreatives
+      summary: Get top-performing creatives
+      tags: [Creative Intelligence]
+      security:
+        - bearerAuth: []
+      responses:
+        '200': { description: Top creatives returned }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/creative-intelligence/insights/{creativeId}:
+    get:
+      operationId: getCreativeInsights
+      summary: Get creative insights
+      tags: [Creative Intelligence]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CreativeIdPath'
+      responses:
+        '200': { description: Creative insights returned }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/creative-intelligence/experiments:
+    get:
+      operationId: listCreativeExperiments
+      summary: List creative experiments
+      tags: [Creative Intelligence]
+      security:
+        - bearerAuth: []
+      responses:
+        '200': { description: Experiments returned }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createCreativeExperiment
+      summary: Create creative experiment
+      tags: [Creative Intelligence]
+      security:
+        - bearerAuth: []
+      responses:
+        '200': { description: Experiment created }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/creative-intelligence/experiments/{id}:
+    get:
+      operationId: getCreativeExperiment
+      summary: Get creative experiment
+      tags: [Creative Intelligence]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ExperimentIdPath'
+      responses:
+        '200': { description: Experiment returned }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      operationId: updateCreativeExperiment
+      summary: Pause, resume, or conclude creative experiment
+      tags: [Creative Intelligence]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ExperimentIdPath'
+      responses:
+        '200': { description: Experiment updated }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/creative-intelligence/experiments/{id}/analyze:
+    post:
+      operationId: analyzeCreativeExperiment
+      summary: Run statistical analysis for experiment
+      tags: [Creative Intelligence]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ExperimentIdPath'
+      responses:
+        '200': { description: Experiment analysis returned }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/omsdk/session:
+    post:
+      operationId: createOmsdkSession
+      summary: Create OMSDK session
+      tags: [OMSDK]
+      responses:
+        '200': { description: OMSDK session created }
+
+  /openrtb/v1/omsdk/event:
+    post:
+      operationId: recordOmsdkEvent
+      summary: Record OMSDK event
+      tags: [OMSDK]
+      responses:
+        '200': { description: OMSDK event recorded }
+
+  /openrtb/v1/omsdk/verification.js:
+    get:
+      operationId: getOmsdkVerificationScript
+      summary: Get OMSDK verification script
+      tags: [OMSDK]
+      responses:
+        '200':
+          description: Verification JavaScript returned
+          content:
+            application/javascript:
+              schema:
+                type: string
+
+  /openrtb/v1/omsdk/report/{campaignId}:
+    get:
+      operationId: getOmsdkVerificationReport
+      summary: Get OMSDK verification report
+      tags: [OMSDK]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CampaignIdPath'
+      responses:
+        '200': { description: OMSDK report returned }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /openrtb/v1/omsdk/session/{sessionId}:
+    get:
+      operationId: getOmsdkSessionStatus
+      summary: Get OMSDK session status
+      tags: [OMSDK]
+      parameters:
+        - $ref: '#/components/parameters/SessionIdPath'
+      responses:
+        '200': { description: OMSDK session status returned }
+
+  /openrtb/v2/bid:
+    post:
+      operationId: acceptInboundBidResponse
+      summary: Accept inbound bid response from external DSP
+      tags: [Programmatic Bidding]
+      responses:
+        '200':
+          description: Bid response accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    description: Bid response ID
+                  status:
+                    type: string
+                    example: accepted
+                  accepted_count:
+                    type: integer
+                  rejected_count:
+                    type: integer
+                  rejections:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        bid_id:
+                          type: string
+                        reason:
+                          type: string
+                        floor:
+                          type: number
+                        bid_price:
+                          type: number
+                  processing_time_ms:
+                    type: number
+        '204':
+          description: All bids rejected
+        '400':
+          description: Invalid bid response format
+
+  /openrtb/v2/adslots:
+    get:
+      operationId: getAvailableAdSlots
+      summary: Discover available audience-enriched ad slots
+      tags: [Programmatic Bidding]
+      responses:
+        '200':
+          description: Available ad slots
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  available_slots:
+                    type: integer
+                    description: Number of available ad slots
+                  bid_requests:
+                    type: array
+                    description: OpenRTB bid request objects for each available slot
+                    items:
+                      $ref: '#/components/schemas/BidRequest'
+                  cur:
+                    type: string
+                    example: USD
+                  tmax:
+                    type: integer
+                    description: Maximum response time in milliseconds
+                    example: 500
+
+  /openrtb/v2/stats:
+    get:
+      operationId: getDspStats
+      summary: Get DSP performance statistics
+      tags: [Programmatic Bidding]
+      responses:
+        '200':
+          description: DSP performance statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  seat:
+                    type: string
+                    description: DSP seat identifier
+                  period:
+                    type: string
+                    example: "24h"
+                  stats:
+                    type: object
+                    properties:
+                      total_bids:
+                        type: integer
+                      total_wins:
+                        type: integer
+                      avg_cpm:
+                        type: number
+                      total_revenue:
+                        type: number
+                      avg_latency_ms:
+                        type: number
+
+  /openrtb/v2/audience/lookalike/{screenId}:
+    get:
+      operationId: findLookalikeScreens
+      summary: Find lookalike screens
+      tags: [Audience Intelligence]
+      parameters:
+        - $ref: '#/components/parameters/ScreenIdPath'
+      responses:
+        '200':
+          description: Lookalike screens
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source_screen_id:
+                    type: string
+                  matches_count:
+                    type: integer
+                  matches:
+                    type: array
+                    items:
+                      type: object
+                      description: Screen match with similarity score
+
+  /openrtb/v2/audience/predict/{screenId}:
+    get:
+      operationId: predictAudience
+      summary: Predict audience for a screen and time window
+      tags: [Audience Intelligence]
+      parameters:
+        - $ref: '#/components/parameters/ScreenIdPath'
+        - name: hour
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 23
+        - name: day
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 6
+        - name: lookback_days
+          in: query
+          schema:
+            type: integer
+            default: 30
+      responses:
+        '200':
+          description: Audience prediction
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  screen_id:
+                    type: string
+                  hour_utc:
+                    type: integer
+                  day_of_week:
+                    type: integer
+                  prediction:
+                    type: object
+                    nullable: true
+                    description: "Null if insufficient historical data"
+                  message:
+                    type: string
+                    description: "Present when prediction is null"
+
+  /openrtb/v2/audience/rank-creatives:
+    post:
+      operationId: rankCreativesForAudience
+      summary: Rank creatives for an audience context
+      tags: [Audience Intelligence]
+      responses:
+        '200':
+          description: Ranked creatives
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ranked_count:
+                    type: integer
+                  creatives:
+                    type: array
+                    items:
+                      type: object
+                      description: Creative with audience relevance score
+
+  /openrtb/v2/audience/semantic-search:
+    get:
+      operationId: semanticAudienceSearch
+      summary: Semantic search across audience scene descriptions
+      tags: [Audience Intelligence]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: since
+          in: query
+          schema:
+            type: string
+            default: 24h
+        - name: min_similarity
+          in: query
+          schema:
+            type: number
+            default: 0.5
+      responses:
+        '200':
+          description: Semantic search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  query:
+                    type: string
+                  results_count:
+                    type: integer
+                  time_window:
+                    type: string
+                    description: Time window for the search
+                    example: "24h"
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      description: Screen with semantic similarity score
+
+  /openrtb/v2/audience/semantic-stats:
+    get:
+      operationId: getAudienceSemanticStats
+      summary: Get embedding statistics for semantic search
+      tags: [Audience Intelligence]
+      responses:
+        '200':
+          description: Embedding statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stats:
+                    type: object
+                    description: Embedding statistics for semantic search
+
+  /openrtb/v2/fein/creative-venue-performance:
+    get:
+      operationId: getCreativeVenuePerformance
+      summary: Get creative x venue performance matrix
+      tags: [FEIN Analytics]
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - name: venue_type
+          in: query
+          schema:
+            type: string
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+            maximum: 90
+        - name: min_plays
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+      responses:
+        '200':
+          description: Creative venue performance matrix
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        creative_category:
+                          type: string
+                        brand:
+                          type: string
+                        venue_type:
+                          type: string
+                        day:
+                          type: string
+                          format: date-time
+                        plays:
+                          type: integer
+                        unique_creatives:
+                          type: integer
+                        avg_attention:
+                          type: number
+                        avg_attention_all:
+                          type: number
+                        avg_cpm:
+                          type: number
+                        win_rate:
+                          type: number
+                        inference_source_count:
+                          type: integer
+                  meta:
+                    type: object
+                    properties:
+                      count:
+                        type: integer
+                      days:
+                        type: integer
+                      min_plays:
+                        type: integer
+                      venue_type:
+                        type: string
+                        nullable: true
+        '401': { $ref: '#/components/responses/ApiKeyUnauthorized' }
+
+  /openrtb/v2/fein/fill-rate-by-venue:
+    get:
+      operationId: getFillRateByVenue
+      summary: Get fill rate by venue
+      tags: [FEIN Analytics]
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - name: venue_type
+          in: query
+          schema:
+            type: string
+        - name: daypart
+          in: query
+          schema:
+            type: string
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+            maximum: 90
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+      responses:
+        '200':
+          description: Fill rate by venue
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        venue_type:
+                          type: string
+                        daypart:
+                          type: string
+                        hour:
+                          type: string
+                          format: date-time
+                        total_requests:
+                          type: integer
+                        fills:
+                          type: integer
+                        fill_rate:
+                          type: number
+                        avg_cpm:
+                          type: number
+                  meta:
+                    type: object
+                    properties:
+                      count:
+                        type: integer
+                      days:
+                        type: integer
+                      venue_type:
+                        type: string
+                        nullable: true
+                      daypart:
+                        type: string
+                        nullable: true
+        '401': { $ref: '#/components/responses/ApiKeyUnauthorized' }
+
+  /openrtb/v2/fein/screen-intelligence/{screenId}:
+    get:
+      operationId: getScreenIntelligence
+      summary: Get screen intelligence
+      tags: [FEIN Analytics]
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ScreenIdPath'
+      responses:
+        '200':
+          description: Screen intelligence data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  screen_id:
+                    type: string
+                  inference:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        inference_snapshot_id:
+                          type: string
+                          format: uuid
+                        face_count:
+                          type: integer
+                        attention_score:
+                          type: number
+                        emotion_score:
+                          type: number
+                        body_engagement:
+                          type: number
+                        daypart:
+                          type: string
+                        venue_type:
+                          type: string
+                        bid_outcome:
+                          type: string
+                        clearing_cpm:
+                          type: number
+                        creative_id:
+                          type: string
+                        inference_source:
+                          type: string
+                        inference_at:
+                          type: string
+                          format: date-time
+                  cpm_history:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        period_date:
+                          type: string
+                          format: date
+                        cpm_rate:
+                          type: number
+                        impressions:
+                          type: integer
+                        revenue_cents:
+                          type: integer
+                  venue_intelligence:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        window_start:
+                          type: string
+                          format: date-time
+                        window_end:
+                          type: string
+                          format: date-time
+                        unique_visitors:
+                          type: integer
+                        avg_attention:
+                          type: number
+                        avg_dwell_ms:
+                          type: integer
+                        dominant_occupancy:
+                          type: string
+                        dominant_ambience:
+                          type: string
+                        dominant_mood:
+                          type: string
+                        avg_engagement_score:
+                          type: number
+                        avg_receptivity_score:
+                          type: number
+                  audience_metrics:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        window_end:
+                          type: string
+                          format: date-time
+                        avg_face_count:
+                          type: number
+                        avg_attention:
+                          type: number
+                        avg_dwell_time_ms:
+                          type: integer
+                        inferred_venue_type:
+                          type: string
+                        estimated_occupancy:
+                          type: number
+                        ad_receptivity_score:
+                          type: number
+                        emotional_engagement_score:
+                          type: number
+        '401': { $ref: '#/components/responses/ApiKeyUnauthorized' }
+
+  /openrtb/v2/fein/model-status:
+    get:
+      operationId: getFeinModelStatus
+      summary: Get FEIN model status
+      tags: [FEIN Analytics]
+      security:
+        - apiKeyAuth: []
+      responses:
+        '200':
+          description: FEIN model status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  model_slices:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        model_type:
+                          type: string
+                        venue_type:
+                          type: string
+                        venue_subtype:
+                          type: string
+                        daypart:
+                          type: string
+                        geo:
+                          type: string
+                        device_profile:
+                          type: string
+                        version:
+                          type: string
+                        weights:
+                          type: object
+                        sample_count:
+                          type: integer
+                        updated_at:
+                          type: string
+                          format: date-time
+                  gradient_uploads:
+                    type: object
+                    properties:
+                      total_uploads:
+                        type: integer
+                      uploads_24h:
+                        type: integer
+                      last_upload:
+                        type: string
+                        format: date-time
+                        nullable: true
+                  meta:
+                    type: object
+                    properties:
+                      total_slices:
+                        type: integer
+        '401': { $ref: '#/components/responses/ApiKeyUnauthorized' }
+
+  /openrtb/v2/fein/audience-segments:
+    get:
+      operationId: getFeinAudienceSegments
+      summary: Get FEIN audience segments
+      tags: [FEIN Analytics]
+      security:
+        - apiKeyAuth: []
+      responses:
+        '200':
+          description: FEIN audience segments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  venue_segments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        segment_name:
+                          type: string
+                        screen_count:
+                          type: integer
+                        avg_attention:
+                          type: number
+                        avg_face_count:
+                          type: number
+                        avg_receptivity:
+                          type: number
+                  scene_embeddings:
+                    type: object
+                    properties:
+                      total_embeddings:
+                        type: integer
+                      embeddings_24h:
+                        type: integer
+                  meta:
+                    type: object
+                    properties:
+                      segment_count:
+                        type: integer
+        '401': { $ref: '#/components/responses/ApiKeyUnauthorized' }
+
+  /openrtb/v2/fein/inference-history:
+    get:
+      operationId: getFeinInferenceHistory
+      summary: Get FEIN inference history
+      tags: [FEIN Analytics]
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - name: screen_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: start
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Start time (default 24h ago)
+        - name: end
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: End time (default now)
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+        - name: source
+          in: query
+          schema:
+            type: string
+            enum: [device, synthetic]
+          description: Filter by inference source
+      responses:
+        '200':
+          description: FEIN inference history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        inference_snapshot_id:
+                          type: string
+                          format: uuid
+                        face_count:
+                          type: integer
+                        attention_score:
+                          type: number
+                        emotion_score:
+                          type: number
+                        body_engagement:
+                          type: number
+                        focus_region:
+                          type: string
+                        daypart:
+                          type: string
+                        venue_type:
+                          type: string
+                        weather_code:
+                          type: string
+                        bid_outcome:
+                          type: string
+                        clearing_cpm:
+                          type: number
+                        creative_id:
+                          type: string
+                        inference_source:
+                          type: string
+                        inference_at:
+                          type: string
+                          format: date-time
+                  meta:
+                    type: object
+                    properties:
+                      screen_id:
+                        type: string
+                      start:
+                        type: string
+                        format: date-time
+                      end:
+                        type: string
+                        format: date-time
+                      count:
+                        type: integer
+                      source:
+                        type: string
+                        nullable: true
+        '401': { $ref: '#/components/responses/ApiKeyUnauthorized' }
+
+  /openrtb/v2/fein/readiness:
+    get:
+      operationId: getFeinReadiness
+      summary: Get FEIN readiness report
+      tags: [FEIN Analytics]
+      security:
+        - apiKeyAuth: []
+      responses:
+        '200':
+          description: FEIN readiness report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [green, yellow]
+                  gates:
+                    type: object
+                    properties:
+                      schema_converged:
+                        type: boolean
+                      duplicate_rate:
+                        type: boolean
+                      daypart_completeness:
+                        type: boolean
+                      venue_type_completeness:
+                        type: boolean
+                      backfill_reliability:
+                        type: boolean
+                      ecosystem_activation:
+                        type: boolean
+                  quality:
+                    type: object
+                    properties:
+                      duplicate_rate_pct:
+                        type: number
+                        nullable: true
+                      daypart_null_pct:
+                        type: number
+                        nullable: true
+                      venue_unknown_or_null_pct:
+                        type: number
+                        nullable: true
+                      device_rows_24h:
+                        type: integer
+                      active_fein_api_keys:
+                        type: integer
+                      active_fein_webhooks:
+                        type: integer
+                  schema_state:
+                    type: object
+                    properties:
+                      complete:
+                        type: boolean
+                      errors:
+                        type: array
+                        items:
+                          type: string
+                  generated_at:
+                    type: string
+                    format: date-time
+        '401': { $ref: '#/components/responses/ApiKeyUnauthorized' }
+
+  /openrtb/v2/fein/webhooks:
+    get:
+      operationId: listFeinWebhooks
+      summary: List FEIN webhooks
+      tags: [FEIN Webhooks]
+      security:
+        - apiKeyAuth: []
+      responses:
+        '200': { description: FEIN webhooks returned }
+        '401': { $ref: '#/components/responses/ApiKeyUnauthorized' }
+    post:
+      operationId: registerFeinWebhook
+      summary: Register FEIN webhook
+      tags: [FEIN Webhooks]
+      security:
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                events:
+                  type: array
+                  items:
+                    type: string
+                secret:
+                  type: string
+      responses:
+        '201': { description: FEIN webhook registered }
+        '401': { $ref: '#/components/responses/ApiKeyUnauthorized' }
+
+  /openrtb/v2/fein/webhooks/{id}:
+    delete:
+      operationId: deleteFeinWebhook
+      summary: Delete FEIN webhook
+      tags: [FEIN Webhooks]
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200': { description: FEIN webhook deleted }
+        '401': { $ref: '#/components/responses/ApiKeyUnauthorized' }
+
+  /openrtb/v2/fein/stream:
+    get:
+      operationId: streamFeinEvents
+      summary: Stream FEIN events over SSE
+      tags: [FEIN Webhooks]
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - name: events
+          in: query
+          schema:
+            type: string
+          description: Optional comma-separated event filter
+      responses:
+        '200':
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401': { $ref: '#/components/responses/ApiKeyUnauthorized' }
+
+components:
+  parameters:
+    ScreenIdQuery:
+      name: screenId
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Screen identifier
+    ScreenIdPath:
+      name: screenId
+      in: path
+      required: true
+      schema:
+        type: string
+    CreativeIdPath:
+      name: creativeId
+      in: path
+      required: true
+      schema:
+        type: string
+    CampaignIdPath:
+      name: campaignId
+      in: path
+      required: true
+      schema:
+        type: string
+    SessionIdPath:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+    ExperimentIdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Unauthorized:
+      description: Bearer token missing or invalid
+    ApiKeyUnauthorized:
+      description: API key missing or invalid
+  schemas:
+    BidRequest:
+      type: object
+      required: [id, imp]
+      properties:
+        id:
+          type: string
+          description: Unique bid request ID
+        imp:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            required: [id]
+            properties:
+              id:
+                type: string
+                description: Impression ID
+              video:
+                type: object
+                properties:
+                  mimes:
+                    type: array
+                    items:
+                      type: string
+                    example: ['video/mp4']
+                  w:
+                    type: integer
+                    example: 1920
+                  h:
+                    type: integer
+                    example: 1080
+                  protocols:
+                    type: array
+                    items:
+                      type: integer
+                    example: [2, 5]
+              bidfloor:
+                type: number
+                example: 2.50
+              bidfloorcur:
+                type: string
+                default: USD
+        dooh:
+          type: object
+          description: DOOH-specific placement context (OpenRTB 2.6)
+          properties:
+            venue:
+              type: object
+              properties:
+                type:
+                  type: array
+                  items:
+                    type: string
+            device:
+              type: object
+              properties:
+                dth:
+                  type: integer
+                  description: Device type hint (4=tablet, 7=set-top-box)
+        site:
+          type: object
+          description: Web placement context
+        app:
+          type: object
+          description: App placement context
+        device:
+          type: object
+          properties:
+            ua:
+              type: string
+            ip:
+              type: string
+            geo:
+              type: object
+              properties:
+                lat:
+                  type: number
+                lon:
+                  type: number
+                country:
+                  type: string
+        tmax:
+          type: integer
+          description: Maximum response time in ms
+          default: 500
+      example:
+        id: br-001
+        imp:
+          - id: imp-1
+            video:
+              mimes: ['video/mp4']
+              w: 1920
+              h: 1080
+            bidfloor: 2.50
+        dooh:
+          venue:
+            type: ['transit']
+        tmax: 500
+
+    BidResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Matches bid request ID
+        seatbid:
+          type: array
+          items:
+            type: object
+            properties:
+              bid:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    impid:
+                      type: string
+                    price:
+                      type: number
+                    adid:
+                      type: string
+                    adm:
+                      type: string
+                      description: VAST XML or ad markup
+                    w:
+                      type: integer
+                    h:
+                      type: integer
+                    crid:
+                      type: string
+                      description: Creative ID
+              seat:
+                type: string
+        cur:
+          type: string
+          default: USD
+      example:
+        id: br-001
+        seatbid:
+          - bid:
+              - id: bid-1
+                impid: imp-1
+                price: 3.25
+                adid: ad-123
+                w: 1920
+                h: 1080
+                crid: cr-456
+            seat: trillboards
+        cur: USD
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: JWT bearer token for protected analytics/admin routes
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: FEIN API key with read or write permissions

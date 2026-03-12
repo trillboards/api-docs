@@ -1,0 +1,697 @@
+openapi: 3.0.3
+info:
+  title: Trillboards Proof-of-Play API
+  version: 2.0.0
+  description: |
+    Cryptographically signed proofs of ad impressions for advertisers.
+
+    ## Overview
+    This API provides cryptographically signed proof-of-play records for ad impressions.
+    Each proof contains an Ed25519 signature that can be independently verified by
+    third parties using our public key.
+
+    ## Signature Verification
+    1. Fetch the public key from `/.well-known/public-key`
+    2. Build the payload: `version.timestamp.adId.impressionId.screenId.deviceId`
+    3. Verify using Ed25519: `verify(signature, payload, publicKey)`
+
+    ## Signature Versions
+    - **v2 (current)**: Ed25519 signatures - third-party verifiable
+    - **v1 (deprecated)**: HMAC-SHA256 - requires shared secret
+  contact:
+    name: Trillboards API Support
+    url: https://trillboards.com/support
+    email: api@trillboards.com
+  license:
+    name: Proprietary
+    url: https://trillboards.com/terms
+
+servers:
+  - url: https://api.trillboards.com/v1/advertiser/proof
+    description: Production
+  - url: http://localhost:4004/v1/advertiser/proof
+    description: Development
+
+tags:
+  - name: Public Key
+    description: Public key for signature verification (no auth required)
+  - name: Proofs
+    description: Retrieve signed proof-of-play records
+  - name: Verification
+    description: Verify proof signatures
+  - name: Export
+    description: Batch export proofs
+
+paths:
+  /.well-known/public-key:
+    get:
+      tags: [Public Key]
+      summary: Get public key for signature verification
+      description: |
+        Returns the Ed25519 public key used to sign all v2 proofs.
+        Third parties can use this key to independently verify signatures.
+
+        **No authentication required.**
+      operationId: getPublicKey
+      security: []
+      responses:
+        '200':
+          description: Public key information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicKeyResponse'
+              example:
+                success: true
+                publicKey: "a5a9c43785680c62ebcd01ec49a0d6055fd140023df0f142c3e37c6abafce34f"
+                algorithm: "ed25519"
+                version: "v2"
+                keyId: "proof-v2-2026"
+                documentation: "https://api.trillboards.com/docs/proof-of-play"
+
+  /campaigns/{campaignId}/proof:
+    get:
+      tags: [Proofs]
+      summary: Get proofs for a campaign
+      description: |
+        Returns cryptographically signed proofs for all completed impressions
+        in the specified campaign. Supports cursor-based pagination for large datasets.
+      operationId: getCampaignProofs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: campaignId
+          in: path
+          required: true
+          description: Campaign/Advertisement ID
+          schema:
+            type: string
+        - name: startDate
+          in: query
+          description: Filter proofs after this date (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+        - name: endDate
+          in: query
+          description: Filter proofs before this date (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          description: Maximum number of proofs to return (default 1000, max 10000)
+          schema:
+            type: integer
+            default: 1000
+            maximum: 10000
+        - name: cursor
+          in: query
+          description: Pagination cursor from previous response
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Campaign proofs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignProofsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /screens/{screenId}/proof:
+    get:
+      tags: [Proofs]
+      summary: Get proofs for a screen
+      description: Returns proofs for all completed impressions on the specified screen.
+      operationId: getScreenProofs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: screenId
+          in: path
+          required: true
+          description: Screen ID
+          schema:
+            type: string
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 500
+            maximum: 5000
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Screen proofs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScreenProofsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /campaigns/{campaignId}/audience-proof:
+    get:
+      tags: [Proofs]
+      summary: Get audience-enhanced proofs
+      description: |
+        Returns aggregated audience data with privacy protection.
+        Individual audience members are not exposed - only aggregate statistics.
+      operationId: getAudienceProofs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: campaignId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Audience proofs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudienceProofsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /verify-proof:
+    post:
+      tags: [Verification]
+      summary: Verify a proof signature
+      description: |
+        Verify the cryptographic signature of a proof.
+        Supports both v1 (HMAC) and v2 (Ed25519) signatures.
+
+        **No authentication required** - third parties can verify proofs independently.
+      operationId: verifyProof
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyProofRequest'
+            example:
+              signature: "ed25519=a1b2c3..."
+              timestamp: 1705401600000
+              adId: "campaign-123"
+              impressionId: "imp-456"
+              screenId: "screen-789"
+              deviceId: "device-abc"
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyProofResponse'
+        '400':
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /campaigns/{campaignId}/export-proof:
+    post:
+      tags: [Export]
+      summary: Export proofs in batch format
+      description: Export proofs as JSON or CSV for offline verification.
+      operationId: exportProofs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: campaignId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                format:
+                  type: string
+                  enum: [json, csv]
+                  default: json
+                startDate:
+                  type: string
+                  format: date-time
+                endDate:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Export data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportProofsResponse'
+            text/csv:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /signature-info:
+    get:
+      tags: [Public Key]
+      summary: Get signature format documentation
+      description: Returns information about the signature format for integrators.
+      operationId: getSignatureInfo
+      security: []
+      responses:
+        '200':
+          description: Signature format info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignatureInfoResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token from /v1/user/login
+
+  schemas:
+    Proof:
+      type: object
+      required:
+        - impressionId
+        - adId
+        - timestamp
+        - signature
+        - signatureVersion
+      properties:
+        impressionId:
+          type: string
+          description: Unique impression identifier
+        adId:
+          type: string
+          description: Campaign/Advertisement ID
+        screenId:
+          type: string
+          description: Screen that displayed the ad
+        deviceId:
+          type: string
+          description: Device identifier
+        timestamp:
+          type: string
+          format: date-time
+          description: When the impression occurred
+        eventType:
+          type: string
+          enum: [impression, start, firstQuartile, midpoint, thirdQuartile, complete]
+          description: VAST event type
+        signature:
+          type: string
+          description: "Cryptographic signature (format: ed25519=<hex> or sha256=<hex>)"
+          example: "ed25519=a1b2c3d4e5f6..."
+        signatureVersion:
+          type: string
+          enum: [v1, v2]
+          description: Signature version (v2 = Ed25519, v1 = HMAC)
+        verifiedAt:
+          type: string
+          format: date-time
+          description: When the proof was generated
+        viewability:
+          $ref: '#/components/schemas/Viewability'
+        displayContext:
+          $ref: '#/components/schemas/DisplayContext'
+        audience:
+          $ref: '#/components/schemas/AudienceData'
+
+    Viewability:
+      type: object
+      properties:
+        viewable:
+          type: boolean
+          description: Whether the ad was viewable (IAB standards)
+        viewableTime:
+          type: number
+          description: Time the ad was viewable (milliseconds)
+        percentInView:
+          type: number
+          description: Percentage of ad visible (0-100)
+
+    DisplayContext:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [fullscreen, l-bar, split]
+          description: Display mode
+        areaRatio:
+          type: number
+          description: Ratio of screen area used (0-1)
+
+    AudienceData:
+      type: object
+      properties:
+        faceCount:
+          type: integer
+          description: Number of faces detected
+        attentionScore:
+          type: number
+          description: Average attention score (0-1)
+        incomeLevel:
+          type: string
+          enum: [low, medium, high, premium]
+
+    Pagination:
+      type: object
+      properties:
+        limit:
+          type: integer
+          description: Requested limit
+        hasMore:
+          type: boolean
+          description: Whether more results exist
+        nextCursor:
+          type: string
+          nullable: true
+          description: Cursor for next page (null if no more results)
+
+    PublicKeyResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        publicKey:
+          type: string
+          description: Hex-encoded Ed25519 public key
+        algorithm:
+          type: string
+          enum: [ed25519]
+        version:
+          type: string
+        keyId:
+          type: string
+        documentation:
+          type: string
+          format: uri
+
+    CampaignProofsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            campaignId:
+              type: string
+            queryPeriod:
+              type: object
+              properties:
+                startDate:
+                  type: string
+                endDate:
+                  type: string
+            totalImpressions:
+              type: integer
+              nullable: true
+              description: Total count (only on first page)
+            proofsReturned:
+              type: integer
+            proofs:
+              type: array
+              items:
+                $ref: '#/components/schemas/Proof'
+            pagination:
+              $ref: '#/components/schemas/Pagination'
+            signatureVersion:
+              type: string
+            publicKeyUrl:
+              type: string
+            generatedAt:
+              type: string
+              format: date-time
+
+    ScreenProofsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            screenId:
+              type: string
+            screenName:
+              type: string
+            location:
+              type: object
+            totalProofs:
+              type: integer
+            proofs:
+              type: array
+              items:
+                $ref: '#/components/schemas/Proof'
+            pagination:
+              $ref: '#/components/schemas/Pagination'
+            signatureVersion:
+              type: string
+            generatedAt:
+              type: string
+              format: date-time
+
+    AudienceProofsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            campaignId:
+              type: string
+            queryPeriod:
+              type: object
+            totalImpressions:
+              type: integer
+            screenBreakdown:
+              type: array
+              items:
+                type: object
+                properties:
+                  screenId:
+                    type: string
+                  impressions:
+                    type: integer
+                  period:
+                    type: object
+                    properties:
+                      first:
+                        type: string
+                        format: date-time
+                      last:
+                        type: string
+                        format: date-time
+            aggregateSignature:
+              type: string
+            signatureVersion:
+              type: string
+            privacyMode:
+              type: string
+              enum: [aggregated]
+            generatedAt:
+              type: string
+              format: date-time
+
+    VerifyProofRequest:
+      type: object
+      required:
+        - signature
+        - timestamp
+      properties:
+        signature:
+          type: string
+          description: "Signature to verify (format: ed25519=<hex> or sha256=<hex>)"
+        signatureVersion:
+          type: string
+          enum: [v1, v2]
+          description: Optional explicit version (auto-detected from prefix)
+        timestamp:
+          oneOf:
+            - type: integer
+              description: Unix timestamp (milliseconds)
+            - type: string
+              format: date-time
+        adId:
+          type: string
+        impressionId:
+          type: string
+        screenId:
+          type: string
+        deviceId:
+          type: string
+
+    VerifyProofResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        verification:
+          type: object
+          properties:
+            valid:
+              type: boolean
+              description: Whether the signature is valid
+            version:
+              type: string
+              enum: [v1, v2]
+            reason:
+              type: string
+              description: Reason for invalid signature (if applicable)
+        publicKeyUrl:
+          type: string
+        verifiedAt:
+          type: string
+          format: date-time
+
+    ExportProofsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            campaignId:
+              type: string
+            format:
+              type: string
+            proofCount:
+              type: integer
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/Proof'
+            checksum:
+              type: string
+              description: SHA256 checksum of the export data
+            signatureVersion:
+              type: string
+            publicKeyUrl:
+              type: string
+            exportedAt:
+              type: string
+              format: date-time
+            expiresAt:
+              type: string
+              format: date-time
+
+    SignatureInfoResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        signatureInfo:
+          type: object
+          properties:
+            currentVersion:
+              type: string
+            algorithm:
+              type: string
+            publicKey:
+              type: string
+            publicKeyUrl:
+              type: string
+            payloadFormat:
+              type: string
+            signaturePrefix:
+              type: string
+            verificationEndpoint:
+              type: string
+            documentation:
+              type: string
+            legacySupport:
+              type: object
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        message:
+          type: string
+        error:
+          type: string
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            message: "Authentication required"
+
+    Forbidden:
+      description: Not authorized to access this resource
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            message: "Not authorized to access this campaign"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            message: "Campaign not found"
